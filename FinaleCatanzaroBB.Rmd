@@ -1,0 +1,2800 @@
+---
+title: "Progetto finale"
+author: "Marco Catanzaro"
+output:
+  ioslides_presentation: 
+    css: scrollable_slides.css
+    incremental: false
+editor_options: 
+  chunk_output_type: inline
+html_document:
+    self_contained: false
+smaller: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(igraph)
+set.seed(123)
+
+```
+
+```{r include=FALSE}
+
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(scales)
+library(igraph)
+library(Matrix)
+library(readr)
+library(htmltools)
+
+
+```
+
+# Breaking Bad
+
+## Estrazione dei dati
+
+*Breaking Bad* è una serie televisiva statunitense, andata in onda a partire dal **2008**,\
+che racconta la trasformazione di **Walter White**, un professore di chimica delle scuole superiori,\
+da uomo comune e frustrato a protagonista di una delle più complesse reti criminali della televisione.
+
+Colpito da una diagnosi di cancro e spinto da difficoltà economiche e familiari,\
+Walter entra nel mondo della produzione e distribuzione di metanfetamina,\
+coinvolgendo progressivamente **familiari, studenti, criminali e forze dell’ordine**.
+
+La serie si presta particolarmente bene a un’analisi di **network science**:\
+i personaggi formano una rete densa e dinamica di relazioni,\
+in cui alleanze, conflitti e ruoli cambiano nel tempo,\
+rendendo *Breaking Bad* un caso di studio ideale per l’analisi dei grafi complessi.
+
+### **Come è stato costruito il dataset**
+
+La rete è stata ottenuta tramite **analisi testuale** di vari riassunti e gli script *episodio per episodio* e *stagione per stagione*,\
+usando strumenti di **scraping** (ad es. *spaCy* in Python) per estrarre le **co-presenze** nelle scene.
+
+Questi strumenti non sono perfetti, portando collegamenti inesistenti nella rete o entità non valide/non persone,\
+quindi per sicurezza, tutte le scene e i valori ottenuti **sono stati ricontrollati manualmente**, riguardando attentamente tutte le scene.
+
+[Link Github per il progetto completo](https://github.com/MarcoCata98/The-Most-Accurate-Breaking-Bad-Character-Network-Analysis)
+
+```{r include=FALSE}
+
+## ESTRAGGO DAL CSV E CREO IL GRAFO tidygraph
+
+edges_raw <- read_csv("ProgettoFinaleBreakingBad.csv")
+
+edges <- edges_raw %>% 
+  rename(
+    from = node1,
+    to   = node2
+  ) %>% 
+  mutate(
+    from = as.character(from),   # come stringa il nome del nodo
+    to   = as.character(to)
+  )
+
+# estraggo il dataframe dei nodes
+
+nodes <- tibble(
+  name = sort(unique(c(edges$from, edges$to)))  # prendo un nodo una volta sola
+)
+
+
+# GENERO IL GRAFO VERO E PROPRIO
+
+graph_bb <- tbl_graph(
+  nodes = nodes,
+  edges = edges,
+  directed = FALSE   # indiretto
+)
+
+#------
+
+# AGGIUNGO INFORMAZIONI AL DATAFRAME DEGLI ARCHI
+
+graph_bb <- graph_bb %>%
+  activate(edges) %>%
+  
+  # Aggiungo una colonna con il nome dei nodi from e to 
+  
+  mutate(
+    Nome_from = .N()$name[from],  # .N()$name  è un riferimento alla tabella dei nodi del grafo
+    Nome_to   = .N()$name[to]     # .N()$name[from] gli passo l'indice from(-int), andrà a prendere il nome del nodo con quel indice
+  ) %>%
+  
+  # Creo una colonna Totale, ogni elemento è la somma degli elementi sulla stessa riga (cioè numero scene totali)
+  
+  mutate(
+    Totale = rowSums(across(-c(from, to, Nome_from, Nome_to)))  #across(-c(a,b,c,d)) ESTRAE le colonne (tutte tranne queste 4)
+  ) %>%                                                         # rowsums ritorna il vettore con le somme per riga di queste colonne
+  
+  
+  # Imposto l'ordine per cui voglio visualizzare, e ordino le righe in base alla colonna Totale
+  
+  select(
+    from, 
+    to,
+    Nome_from,
+    Nome_to,
+    Totale,
+    everything()   
+  )%>%
+  arrange(desc(Totale))%>%
+  
+  # Aggiungo anche il grado del nodo nel dataframe nodes e li riordino per grado
+    
+  activate(nodes) %>%
+  mutate(
+    degree = centrality_degree()
+  ) %>%
+  arrange(desc(degree))
+
+
+# OTTENGO IL DATAFRAME PULITO
+
+        #graph_bb
+
+
+```
+
+```{r echo=FALSE}
+
+# Metto nelle slide un anteprima della tabella nodi, per mostrare com'è fatta 
+
+edges_preview <- graph_bb %>% 
+  activate(edges) %>%
+  as_tibble()%>%       # as_tibble() prende il dataframe e ne estrae una semplice tabella in R
+  select(1:8) %>% 
+  slice_head(n = 10)
+
+edges_preview
+
+
+```
+
+## Struttura base del grafo
+
+Il grafo `graph_bb` rappresenta la **rete delle co-presenze** tra i personaggi della serie *Breaking Bad*.
+
+-   **Nodi (V)**: **113** personaggi della serie (inclusi alcuni personaggi secondari e comparse rilevanti, quando hanno un ruolo **non marginale** nella narrazione).
+-   **Archi (E)**: **403** coppie di personaggi è legata da un arco se i due hanno **co-partecipato ad almeno una scena** nell’intera serie.
+-   **Pesi archi**: Ogni carco possiede 63 colonne di pesi, **uno per episodio**, il peso corrisponde al **numero esatto di scene condivise** da quella coppia in quel determinato episodio
+-   **Peso totale**: La colonna **Totale** contiene il numero esatto di **scene condivise nel intera serie** da quella coppia
+
+### **Grafo totale**
+
+Evidenziato **Walter White**, il protagonista - **Grafo indiretto**
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+
+## VISUALIZZO IL GRAFICO GENERALE
+
+g_main <- graph_bb
+  
+
+# impostazioni grafiche
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+
+# Plotto il grafo con ggraph
+
+ggraph(g_main, layout = "kk") +
+
+  geom_edge_link(
+    colour = "grey80",    # archi grigi
+    alpha  = 0.35,        # archi trasparenti  (altrimenti non si leggono i nomi)
+    width  = 0.8          # archi meno spessi
+  ) +
+
+  
+  geom_node_point(
+  aes(color = name == "Walter White"),   # se il nome del nodo è "walter white", diventa True altrimenti false
+  size = 3
+) +
+scale_color_manual(
+  values = c("TRUE" = "red", "FALSE" = "black"),  # coloro di rosso True (walter) e nero Black (tutti gli altri)
+  guide = "none" 
+) +
+  
+  
+  geom_node_text(
+    aes(label = name),   # le label dei nodi sono l'attributo "name"
+    repel = TRUE,        # ben distanziate dal nodo
+    size = 3
+  ) +
+  
+
+  theme_graph() +
+  ggtitle("Rete delle co-presenze in Breaking Bad ")
+
+```
+
+### **Ricordiamo che *Breaking Bad* è una serie tv**
+
+I protagonisti **Walter White** e **Jesse Pinkman** risultano **centrali** perché la storia ruota attorno a loro e alle loro azioni,
+
+**Quindi per motivi narrativi, incontreranno quasi tutti gli altri personaggi durante tutta la serie.**
+
+*(Ergo: I primi risultati nella maggior parte delle metriche saranno spesso prevedibili).*
+
+Interessante è osservare **quali nodi emergono oltre ai 2 protagonisti**:
+
+-   **Skyler White** moglie di Walter, inizialmente confinata al contesto familiare, con l'avanzamento della trama, entra in contatto\
+    con molteplici personaggi esterni, raggiungendo anche posizioni alte nella classifica per grado.
+-   **Hank Schrader** Agente DEA , nonostante all’inizio appaia come figura di comparsa (semplice cognato di Walter),\
+    assume progressivamente un ruolo centrale: la sua indagine su *Heisenberg* lo porta a interagire e scontrarsi con i vari concorrenti di Walter, per poi scoprire che il nemico era più vicino di quanto pensasse.
+
+***Gli altri nodi** nella rete avranno peso diverso e **ruoli diversi** nel grafo, anche temporalmente.*
+
+### **Centralità basata sul grado**
+
+```{r echo=FALSE}
+
+# VISUALIZZO IN 5 NODI CON GRADO MAGGIORE
+
+nodes_preview <- graph_bb %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  arrange(desc(degree)) %>%
+  select(name, degree) %>%
+  slice_head(n = 8)
+
+nodes_preview
+
+```
+
+Oltre i 2 protagonisti troviamo :
+
+**Hank che supera Skyler :** In quanto incontra molti criminali nel suo lavoro.
+
+**Il** **nucleo familiare dei White** — cene, discussioni domestiche, momenti quotidiani —\
+spesso condivisi anche con **Hank Schrader** e sua moglie **Marie Schrader**.
+
+*Rappresenta infatti i nucleo narrativo più presente nella storia,\
+lo vediamo anche nel peso degli archi :*
+
+```{r echo=FALSE}
+
+# VISUALIZZO I 5 ARCHI CON PESO MAGGIORE
+
+
+edges_preview <- graph_bb %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  arrange(desc(Totale), Nome_from, Nome_to) %>%
+  select(Nome_from, Nome_to, Totale) %>%
+  slice_head(n = 5)
+
+edges_preview
+
+
+```
+
+Tra i **cinque nodi con grado più alto** compaiono, come previsto, **Walter White** e **Jesse Pinkman**:\
+essendo i protagonisti, l’intera narrazione ruota attorno a loro e ciò li porta a interagire con una grande parte del cast.
+
+È invece più interessante notare la presenza di **Hank Schrader** al **terzo posto**.\
+A prima vista potrebbe sembrare meno centrale, anche perché molte scene sono ambientate nel contesto della **famiglia White**.
+
+Osserviamo meglio, qualitativamente qual'è il suo vicinato, e con chi ha a che fare per avere un grado così elevato :
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+
+
+# VISUALIZZO IL VICINATO DI HANK
+
+# opzioni grafiche
+
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+#------------------------------------------
+
+# Estraggo il vicinato di Hank
+
+target_name <- "Hank Schrader"
+
+g_tot <- graph_bb %>%
+  activate(edges) %>%
+  select(1:5) %>%
+  activate(nodes) %>%
+  rename(deg = degree)
+
+
+ig <- as.igraph(g_tot) # Estraggo il grafo con igraph (ha funzioni comode per usare la matrice di adiacenza)
+t_id <- which(V(ig)$name == target_name)  # cerco l'id del nodo con  !! attributo  nome == Hank
+
+
+# ESTRAE GLI ID DEI NODI VICINI
+
+keep_ids <- c(t_id, as.integer(neighbors(ig, t_id, mode = "all")))  
+ig_star <- induced_subgraph(ig, vids = keep_ids)  # e crea un sottografo con questi nodi
+
+t2 <- which(V(ig_star)$name == target_name)           # Estrae l'id hank nel nuovo sottografo
+
+e_keep <- incident(ig_star, t2, mode = "all")      # estrae il vicinato (ma ci sono anche gli archi che anno tra loro)
+ig_star <- subgraph.edges(ig_star, e_keep, delete.vertices = FALSE) # tiene solo gli archi che toccano il nodo hank e basta
+
+
+
+#--------------------------------------
+
+# Torno da tidygraph e PLOTTO IL GRAFO ig_star (quello di adiacenza di hank)
+
+
+g_star <- as_tbl_graph(ig_star) %>%
+  activate(nodes) %>%
+  mutate(size_node = ifelse(name == target_name, 9, 4))
+
+lay <- ggraph::create_layout(g_star, layout = "kk")
+lay$x <- lay$x - lay$x[lay$name == target_name]
+lay$y <- lay$y - lay$y[lay$name == target_name]
+
+ggraph(lay) +
+  geom_edge_link(aes(edge_colour = Totale, edge_width = Totale), alpha = 0.70) +
+  scale_edge_colour_continuous(low = "#D6E6FF", high = "#003B8E", labels = scales::comma) +
+  scale_edge_width(range = c(0.8, 3.6)) +
+  geom_node_point(aes(size = size_node), shape = 21, fill = "white",
+                  colour = "black", stroke = 1.1) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 4) +
+  scale_size_identity() +
+  theme_graph() +
+  ggtitle(paste0("Vicinato di ", target_name)) +
+  guides(edge_width = "none", size = "none")
+
+
+```
+
+Questa visualizzazione mostra come **Hank Schrader** entri in contatto\
+con **diversi gruppi narrativi** della serie\
+(famiglia White, DEA, colleghi, gruppi criminali, e diversi personaggi secondari),\
+dimostrando che il suo ruolo è **più centrale di quanto possa apparire a una prima lettura della trama**.
+
+## Analisi temporale
+
+Prima di concentrarci sull’analisi strutturale del grafo, è utile sfruttare la **dimensione temporale** del dataset,\
+che contiene una grande distribuzione dei dati, cioè delle scene **episodio per episodio**.
+
+Visualizzare in sequenza i grafi delle co-presenze consente di osservare **l’evoluzione narrativa** della serie:
+
+questa analisi è principalmente **qualitativa**, ma risulta molto informativa e visivamente efficace.\
+In particolare, mostra come un episodio “medio” presenti spesso **molte meno relazioni** di quanto ci si aspetterebbe\
+rispetto alla grande dimensione del grafo complessivo.
+
+Un esempio emblematico è l’episodio **10S3 (*La mosca*)**, in cui compaiono solo **tre personaggi**:\
+questa struttura semplice del grafo, rivela una determinata scelta di produzione;\
+cercando online si scopre facilmente che è anche legata a un **budget ridotto** rispetto ad altri episodi.
+
+La visualizzazione temporale è inoltre utile per individuare specifici episodi importanti che **stravolgono l’equilibrio della rete**,\
+introducendo eventi chiave come incontri decisivi, morti o prime apparizioni di personaggi rilevanti.
+
+**Esempi significativi:**
+
+-   **07S2** – attentato del cartello a Hank: il grafo evidenzia la **separazione strutturale** tra Hank e colleghi (in Messico)\
+    e il nucleo principale ad Albuquerque.
+-   **11S2** – Emerge isolato l'evento che coinvolge Tomas e Combo, Tomas Cantillo è il bambino che uccide Combo amico di jesse .
+-   **02S3** – prima apparizione dei **gemelli Salamanca**, durante la visita allo **zio Hector** nella casa di riposo,\
+    evento che introduce i 2 personaggi destinati a diventare centrali nella serie.
+
+### **Grafo delle co-presenze episodio per episodio**
+
+Genero un Widget HTML che mi permette di visualizzare dinamicamente i grafi di ogni episodio :
+
+```{r echo=FALSE}
+
+## WIDGET HTML PER LA VISUALIZZAZIONE DEI GRAFI EPISODIO PER EPISODIO
+
+# Per fare la visualizzazione carina, è stato programmato un widget html, dato che il formato ioSlide lo permette
+
+
+  library(htmltools)
+  library(base64enc)
+  library(jsonlite)
+
+
+# Estraggo e metto in una tibble tutto il grafo degli edges
+
+edge_tbl <- graph_bb %>% activate(edges) %>% as_tibble()
+
+# Estraggo i nomi degli episodi 
+
+ep_cols <- names(edge_tbl)[6:ncol(edge_tbl)]  #names(tbl) lista nomi colonne della tabella , prendo dalla 6 in poi
+
+
+# Ordino i nomi degli episodi  (alcuni non sono messi correttamente)
+
+ep_order <- tibble(col = ep_cols) %>%
+  mutate(                                                              # per ogni nome del episodio, creo le colonne con 
+    ep_num = as.integer(stringr::str_extract(col, "^\\d{2}")),         # numero ep
+    season = as.integer(stringr::str_extract(col, "(?<=S)\\d+$"))      # stagione 
+  ) %>%
+  arrange(season, ep_num) %>%     # ordino i nomi nel ordine corretto
+  pull(col)                       # ed riestraggo i nomi nel ordine corretto
+
+
+#---------------
+
+
+# SCRIVO LA FUNZIONE CHE GENERA IL GRAFO DI OGNI EPISODIO
+
+# - Fornito il nome del episodio / della colonna nel dataframe
+# - Mi ritorna il grafo di soloquel episodio
+
+
+make_episode_graph <- function(ep_col) {
+  
+  # va nel dataframe degli archi di graph_bb
+  graph_bb %>%
+    activate(edges) %>%
+    
+    mutate(w = .data[[ep_col]]) %>%   # ricopia i pesi della colonna di quel episodio in una colonna w
+    filter(w > 0) %>%     # tiene solo gli archi peso > 0 (QUINDI ELIMINO ARCHI NON PRESENTI IN QUEL EPISODIO)
+    activate(nodes) %>%
+    mutate(deg = centrality_degree()) %>%   # ricacolo il grado solo per quel episodio
+    filter(!is.na(deg) & deg > 0)           # elimino tutti i nodi isolati con grado 0
+}
+
+
+
+# SCRIVO LA FUNZIONE CHE PLOTTA IL GRAFO DEL EPISODIO
+# - dato il grafo g, lo plotta 
+# - ep_col lo usa per il titolo
+
+plot_episode <- function(g, ep_col) {
+  set.seed(123)
+
+  
+  ggraph(g, layout = "kk") +
+    geom_edge_link(colour = "grey80", alpha = 0.45, width = 0.8) +  # archi grigi e trasparenti
+    geom_node_point(size = 3.3, color = "black") +                  # punti neri
+    geom_node_text(                                                 # etichette dei nomi
+      aes(label = name),
+      repel = TRUE,
+      size  = 7,         
+      fontface = "plain"
+    ) +
+    theme_graph() +
+    ggtitle(paste0("Rete delle co-presenze – Episodio ", ep_col))
+}
+
+#---------------------
+
+# FACCIO IL LOOP, GENERANDO IL GRAFO PER OGNI EPISODIO
+
+# AVRO' UNA CARTELLA TEMPORANEA CHE SALVA TUTTE LE IMAMGINI DEI GRAFI
+tmp_dir <- file.path(tempdir(), "bb_eps")
+dir.create(tmp_dir, showWarnings = FALSE)
+data_uris <- character(length(ep_order))
+
+
+# PER OGNI EPISODIO
+# - Genero il grafo
+# - Lo salvo in PNG
+
+for (i in seq_along(ep_order)) {
+  ep <- ep_order[i]
+  g_ep <- make_episode_graph(ep)
+
+  out_png <- file.path(tmp_dir, paste0("ep_", ep, ".png"))  # Definisco il path + nome di dove salvare il PNG
+
+  p <- plot_episode(g_ep, ep)                                    # genero la visualizzazione del grafo
+  ggsave(out_png, plot = p, width = 14, height = 9, dpi = 220)   # lo salvo come PNG, con questa risoluzione
+
+  # ! Trasformo l'immagine in una stringa codificata, questo permette di salvarla nel file html, senza avere ref esterne
+  data_uris[i] <- base64enc::dataURI(file = out_png, mime = "image/png")
+}
+
+
+#-----------------
+
+# GENERO IL WIDGET HTML PER PERMETTERE L'INTERAZIONE DEI GRAFI
+
+
+widget_id <- "bb_episode_widget"
+
+html <- tags$div(
+  id = widget_id,
+  style = "max-width: 1000px; margin: 0 auto;",
+
+  tags$div(
+    style = "display:flex; align-items:center; gap:10px; margin: 10px 0;",
+    tags$button("◀", id = paste0(widget_id, "_prev"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$button("▶", id = paste0(widget_id, "_next"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$span(id = paste0(widget_id, "_label"),
+              style="font-size:16px; opacity:0.85;")
+  ),
+
+  
+  tags$div(
+    style = "position:relative;",
+    tags$img(
+      id = paste0(widget_id, "_img"),
+      src = data_uris[1],
+      style = "width:100%; height:auto; border-radius:10px;
+               box-shadow:0 2px 10px rgba(0,0,0,0.15); display:block;"
+    ),
+    tags$div(  
+      style = "position:absolute; right:18px; bottom:18px;
+               width:70px; height:34px; background:#ffffff; opacity:0.95;
+               border-radius:6px;"
+    )
+  ),
+
+  tags$script(HTML(sprintf("
+    (function(){
+      const eps  = %s;
+      const uris = %s;
+      let i = 0;
+
+      const img  = document.getElementById('%s_img');
+      const lab  = document.getElementById('%s_label');
+      const prev = document.getElementById('%s_prev');
+      const next = document.getElementById('%s_next');
+
+      function render(){
+        img.src = uris[i];
+        lab.textContent = 'Episodio ' + eps[i] + ' (' + (i+1) + '/' + eps.length + ')';
+      }
+
+      prev.onclick = function(){
+        i = (i - 1 + eps.length) %% eps.length;
+        render();
+      };
+
+      next.onclick = function(){
+        i = (i + 1) %% eps.length;
+        render();
+      };
+
+      render();
+    })();
+  ",
+    jsonlite::toJSON(ep_order),
+    jsonlite::toJSON(data_uris),
+    widget_id, widget_id, widget_id, widget_id
+  )))
+)
+
+htmltools::browsable(html)
+
+
+
+```
+
+<br><br>
+
+### **Versione Cumulativa**
+
+E' leggermente più confusionaria, ma da l'idea del evoluzione che porta al grafo terminale
+
+```{r echo=FALSE}
+
+# TODO : RINCONTROLLARE
+
+  library(htmltools)
+  library(base64enc)
+  library(jsonlite)
+  library(scales)
+  library(stringr)
+
+
+# ===== 1) Colonne episodio in ordine (01S1, 02S1, ...) =====
+edge_tbl <- graph_bb %>% activate(edges) %>% as_tibble()
+
+ep_cols <- names(edge_tbl)[stringr::str_detect(names(edge_tbl), "^\\d{2}S\\d+$")]
+
+ep_order <- tibble(col = ep_cols) %>%
+  mutate(
+    ep_num = as.integer(stringr::str_extract(col, "^\\d{2}")),
+    season = as.integer(stringr::str_extract(col, "(?<=S)\\d+$"))
+  ) %>%
+  arrange(season, ep_num) %>%
+  pull(col)
+
+if (length(ep_order) == 0) {
+  stop("Non trovo colonne episodio nel grafo (pattern: 01S1, 02S1, ...).")
+}
+
+# ===== 2) Massimo peso globale (per scala colore) =====
+max_total <- if ("Totale" %in% names(edge_tbl)) {
+  max(edge_tbl$Totale, na.rm = TRUE)
+} else {
+  max(rowSums(edge_tbl[, ep_order, drop = FALSE], na.rm = TRUE), na.rm = TRUE)
+}
+
+# ===== 3) Grafo cumulativo fino a k (archi con cum_w > 0, niente isolati) =====
+make_cumulative_graph <- function(k) {
+  cols_upto <- ep_order[seq_len(k)]
+
+  graph_bb %>%
+    activate(edges) %>%
+    mutate(cum_w = rowSums(across(all_of(cols_upto)), na.rm = TRUE)) %>%
+    filter(!is.na(cum_w) & cum_w > 0) %>%
+    activate(nodes) %>%
+    mutate(deg = centrality_degree()) %>%
+    filter(!is.na(deg) & deg > 0)
+}
+
+# ===== 4) Plot cumulativo: grigio -> rosso + nomi grandi =====
+plot_cumulative <- function(g, label_txt) {
+  set.seed(123)
+
+  ggraph(g, layout = "kk") +
+    geom_edge_link(
+      aes(colour = cum_w, width = cum_w),
+      alpha = 0.55,
+      lineend = "round"
+    ) +
+    scale_edge_colour_gradient(
+      low    = "grey85",
+      high   = "red3",
+      limits = c(0, max_total),
+      oob    = scales::squish,
+      guide  = "none"
+    ) +
+    scale_edge_width(range = c(0.4, 3.0), guide = "none") +
+    geom_node_point(size = 3.3, color = "black") +
+    geom_node_text(aes(label = name), repel = TRUE, size = 7) +
+    theme_graph() +
+    ggtitle(label_txt)
+}
+
+# ===== 5) Check robusto: ha archi? =====
+has_edges <- function(g) {
+  tryCatch({
+    nrow(g %>% activate(edges) %>% as_tibble()) > 0
+  }, error = function(e) FALSE)
+}
+
+# ===== 6) Render PNG per ogni step cumulativo -> dataURI =====
+tmp_dir <- file.path(tempdir(), "bb_cum")
+dir.create(tmp_dir, showWarnings = FALSE)
+
+data_uris_cum <- character(length(ep_order))
+labels_cum    <- character(length(ep_order))
+
+for (k in seq_along(ep_order)) {
+  ep <- ep_order[k]
+  g_c <- make_cumulative_graph(k)
+
+  out_png <- file.path(tmp_dir, sprintf("cum_%03d_%s.png", k, ep))
+  labels_cum[k] <- paste0("Cumulativo fino a ", ep, " (", k, "/", length(ep_order), ")")
+
+  if (!has_edges(g_c)) {
+    png(out_png, width = 1800, height = 1100, res = 200)
+    plot.new()
+    text(0.5, 0.55, paste("Nessun arco cumulativo fino a", ep), cex = 2)
+    dev.off()
+  } else {
+    p <- plot_cumulative(g_c, labels_cum[k])
+    ggsave(out_png, plot = p, width = 14, height = 9, dpi = 220)
+  }
+
+  data_uris_cum[k] <- base64enc::dataURI(file = out_png, mime = "image/png")
+}
+
+# ===== 7) Widget HTML con frecce (come quello precedente) =====
+widget_id_cum <- "bb_cumulative_widget"
+
+html_cum <- tags$div(
+  id = widget_id_cum,
+  style = "max-width: 1000px; margin: 0 auto;",
+
+  tags$div(
+    style = "display:flex; align-items:center; gap:10px; margin: 10px 0;",
+    tags$button("◀", id = paste0(widget_id_cum, "_prev"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$button("▶", id = paste0(widget_id_cum, "_next"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$span(id = paste0(widget_id_cum, "_label"),
+              style="font-size:16px; opacity:0.85;")
+  ),
+
+  tags$div(
+    style = "position:relative;",
+    tags$img(
+      id = paste0(widget_id_cum, "_img"),
+      src = data_uris_cum[1],
+      style = "width:100%; height:auto; border-radius:10px;
+               box-shadow:0 2px 10px rgba(0,0,0,0.15); display:block;"
+    )
+  ),
+
+  tags$script(HTML(sprintf("
+    (function(){
+      const labels = %s;
+      const uris   = %s;
+      let i = 0;
+
+      const img  = document.getElementById('%s_img');
+      const lab  = document.getElementById('%s_label');
+      const prev = document.getElementById('%s_prev');
+      const next = document.getElementById('%s_next');
+
+      function render(){
+        img.src = uris[i];
+        lab.textContent = labels[i];
+      }
+
+      prev.onclick = function(){
+        i = (i - 1 + labels.length) %% labels.length;
+        render();
+      };
+
+      next.onclick = function(){
+        i = (i + 1) %% labels.length;
+        render();
+      };
+
+      render();
+    })();
+  ",
+    jsonlite::toJSON(labels_cum),
+    jsonlite::toJSON(data_uris_cum),
+    widget_id_cum, widget_id_cum, widget_id_cum, widget_id_cum
+  )))
+)
+
+htmltools::browsable(html_cum)
+
+
+
+```
+
+## Analisi strutturale
+
+A questo punto ci concentriamo sull’analisi tecnica del grafo.\
+Trattandosi di una **serie crime**, l’obiettivo è comprendere la **struttura della rete di relazioni** rappresentata, così da interpretarla da diversi punti di vista strategici.
+
+In particolare, l’analisi può essere letta:
+
+-   **dal punto di vista delle forze dell’ordine (DEA)**, per individuare i nodi più rilevanti e comprendere come smantellare nel modo più rapido ed efficace la rete criminale
+
+-   **dal punto di vista del cartello messicano**, per analizzare come le informazioni e i messaggi possano essere trasmessi in modo più efficiente all’interno della rete.
+
+```{r include=FALSE}
+
+# DA ADESSO LAVOREREMO SOLO SUL GRAFO TOTALE, IGNORANDO I DATI EPISODIO PER EPISODIO  g_tot
+
+g_tot <- graph_bb %>%
+  activate(edges) %>%
+  select(1:5) %>%
+  activate(nodes) %>%
+  rename(deg = degree)
+
+  
+
+```
+
+### **Distribuzione dei gradi**
+
+```{r echo=FALSE}
+
+# VISUALIZZIAMO LA DISTRIBUZIONE DEI GRADI
+
+# estraggo come singola variabile solo la colonna dei gradi deg
+deg_df <- g_tot %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  select(deg)
+
+# CALCOLO MEDIA E MEDIANA
+
+deg_mean   <- mean(deg_df$deg)
+deg_median <- median(deg_df$deg)
+
+#------------------
+
+# PLOTTO CON GGPLOT 
+
+# faccio un istogramma (y = Freq grado, x = Grado)
+
+ggplot(deg_df, aes(x = deg)) +
+  geom_histogram(
+    binwidth = 2,
+    fill = "grey85",
+    color = "black"
+  ) +
+  geom_density(                   # disegno anche la densità, che approssima la distribuzione
+    aes(y = after_stat(count)),
+    color = "red",
+    linewidth = 1,
+    adjust = 2.5   
+  ) +
+  
+
+# Diseggno anche le linee di media e mediana
+  
+  geom_vline(
+    xintercept = deg_mean,
+    color = "blue",
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  geom_vline(
+    xintercept = deg_median,
+    color = "darkgreen",
+    linewidth = 1,
+    linetype = "dotted"
+  ) +
+  
+# E scrivo le etichette
+  
+  labs(
+    title = "Distribuzione dei gradi - grafo Totale",
+    x = "Grado ",
+    y = "Frequenza"
+  ) +
+  annotate(
+    "text",
+    x = deg_mean,
+    y = Inf,
+    label = "Media",
+    color = "blue",
+    angle = 90,
+    vjust = -0.5
+  ) +
+  annotate(
+    "text",
+    x = deg_median,
+    y = Inf,
+    label = "Mediana",
+    color = "darkgreen",
+    angle = 90,
+    vjust = -0.5
+  ) +
+  
+  theme_minimal()
+
+
+```
+
+La distribuzione dei gradi mostra un andamento tipico **power-law**:\
+la **maggior parte** dei nodi ha un grado basso (circa **1–10**),\
+mentre **pochi nodi** presentano un grado elevato, con una evidente **coda lunga**.\
+\
+In prima approssimazione la relazione può essere descritta da una funzione polinomiale:
+
+$$
+f(x)=\frac{c}{x^{a}}
+$$
+
+Di conseguenza, nella coda si collocano i nodi più connessi (es. **Walter** e **Jesse**).
+
+\
+Questa evidenza è ulteriormente supportata dal grafico in scala **log–log** riportato sotto.\
+*Per una visualizzazione più stabile viene inoltre plottata la **CCDF** (distribuzione cumulativa).*
+
+```{r echo=FALSE}
+
+# PLOTTIAMO LA DISTRIBUZIONE SU SCALA LOG-LOG E VEDIAMO SE SEGUE UNA RETTA DISCENDENTE
+
+# La distribuzione base non è uniforme, ha diversi buchi ed molto irregolare e sparsa, plottarla crea un grafico CORRETTO ma BRUTTO
+
+# SFRUTTIAMO ALLORA LA CCDF (complementary CDF)
+# cioè la distribuzione cumulata relativa :
+# - estraiamo i valori di frequenza relativa  ( numero assoluto di nodi con grado x / numero nodi totale)
+# - li mettiamo al contrario  ( freq x = 72 -> 0,003% , freq x = 68 -> 0.003% ...  freq x = 1 -> 0.18% )
+# - calcoliamo la freq cumulativa  ( freq x = 72 -> 0.003% , freq = 68 -> 0.006%  ...  freq x = 1 -> 1%)
+
+# quindi la distribuzione per ogni grado x , sarà la CCFD 
+# SI DIMOSTRA CHE QUESTA DISTRIBUZIONE MESSA IN SCALA LOG-LOG HA LO STESSO EFFETTO CHE METTERE LA DISTRIBUZIONE ORIGINALE
+# ma otterremo un grafico migliore, in quanto non prenderemo valori esatti, ma una media dei valori fino a quel punto 
+# quindi avremo valori più regolari e meno rumore !!
+
+#----------------------------------------------------------------------------------------------
+
+
+# Estrazione dei gradi dal grafo totale
+deg_vec <- g_tot %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  pull(deg)
+
+# Calcolo la CCDF
+deg_ccdf <- tibble(deg = deg_vec) %>%
+  count(deg) %>%                         # Crea un vettore chiamato n(x) , che per ogni grado x dice quanti nodi hanno il grado x 
+  arrange(deg) %>%                      
+  mutate(
+    p = n / sum(n),                     # creo la colonna p(x) = numero di nodi con grado x / numero di nodi totale
+    ccdf = rev(cumsum(rev(p)))          # creo la colonna ccdf(x) = somma cumulativamente fino a x, in ordine inverso
+  )
+
+
+#---------
+
+# Plottiamo la CCDF in scala LOG-LOG
+
+ggplot(deg_ccdf, aes(x = deg, y = ccdf)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", color = "red") +   # aggiungo la retta decrescente per vedere se la segue
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    title = "Distribuzione cumulativa dei gradi (CCDF) - in scala LOG-LOG",
+    x = "LOG(grado)",
+    y = "LOG(CCDF)"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+Il grafico in **scala log–log** evidenzia un andamento\
+approssimativamente **lineare e decrescente**,\
+coerente con una distribuzione dei gradi di tipo **power law**,\
+caratterizzata dalla presenza di pochi nodi altamente connessi **(hub)**.
+
+### **Skewness**
+
+Possiamo verificare anche la **simmetria della distribuzione dei gradi**.\
+Già a colpo d’occhio si osserva che la **mediana è maggiore della media**,\
+indicando una **asimmetria a destra della distribuzione** (appunto: molti valori bassi e pochi alti).
+
+Questo risultato è coerente con quanto osservato nel caso della **power law**:\
+la rete è caratterizzata da **molti nodi con grado basso** e da **pochi nodi con grado elevato**,\
+che trascinano la media verso valori più alti e rendono la distribuzione fortemente sbilanciata.
+
+```{r echo=FALSE}
+
+# CALCOLO DI MEDIA MEDIANA E SKEWNESS
+
+
+# Estraggo la variabile con i gradi
+
+deg_tbl <- g_tot %>%
+  activate(nodes) %>%
+  as_tibble()
+
+
+# Calcolo della skewness (con la formula delle slide)
+
+skewness <- function(x) {
+  mean( (x - mean(x))^3 ) / (sd(x)^3)
+}
+
+# Calcolo statistiche
+media_deg   <- mean(deg_tbl$deg)
+mediana_deg <- median(deg_tbl$deg)
+skew_deg    <- skewness(deg_tbl$deg)
+
+
+# Stampare le statistiche
+
+tibble(
+  statistica = c("Media", "Mediana", "Skewness"),
+  valore     = c(media_deg, mediana_deg, skew_deg)
+)
+
+# Skewness > 0 e media > mediana   => asimmetria a destra    = Molti valori bassi e coda lunga a destra
+# Skewness < 0 e media < mediana   => asimmetria a sinsitra  = Molti valori alti  e coda lunga a sinistra
+
+```
+
+Un valore di **skewness elevato** (pari a **4.19**) conferma ulteriormente\
+la **forma asimmetrica a destra** della distribuzione dei gradi\
+ed è coerente con un andamento di tipo **power law**.
+
+Inoltre, questo valore indica la presenza di una **coda lunga a destra**:\
+a differenza di una distribuzione esponenziale, la power law **non decade rapidamente verso zero**,\
+ma mantiene una probabilità non trascurabile di osservare valori **molto lontani dalla media**.
+
+Nel nostro caso, la **media del grado** è pari a **7.22**,\
+mentre il **valore massimo osservato** di grado (**Walter**) raggiunge **72**,\
+un valore estremamente più elevato rispetto alla media.
+
+Questo conferma la presenza di **pochi nodi hub** con grado molto alto,\
+immersi in una rete composta principalmente da nodi con grado basso.
+
+### **Visualizzazione del vicinato di tutti gli altri nodo**
+
+Creo un nuovo Widget, simile al precedente, che permette di visualizzare in maniera sequenziale i vicinati dei vari nodi :
+
+```{r echo=FALSE}
+
+# TODO : RINCONTROLLARE
+
+# WIDGET HTML PER LA VISUALIZZAZIONE DEI VICINATI
+
+  library(htmltools)
+  library(base64enc)
+  library(jsonlite)
+  library(scales)
+
+
+#--------------------------
+
+# FUNZIONE CHE GENERA I VARI GRAFI
+
+
+g_base <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes) %>%
+  filter(!is.na(degree) & degree > 0)
+
+nodes_tbl <- g_base %>%
+  activate(nodes) %>%
+  as_tibble() %>%
+  arrange(desc(degree), name)
+
+
+
+
+top10_names <- nodes_tbl %>% slice_head(n = 10) %>% pull(name)
+
+top_cols <- c(
+  "Walter White"      = "#F1C40F",  # giallo
+  "Jesse Pinkman"     = "#E74C3C",  # rosso
+  "Skyler White"      = "#8E44AD",  # viola
+  "Hank Schrader"     = "#1ABC9C",  # turchese
+  "Saul Goodman"      = "#E67E22",  # arancio
+  "Gustavo Fring"     = "#2ECC71",  # verde
+  "Mike Ehrmantraut"  = "#34495E",  # blu/grigio scuro
+  "Walter White Jr."  = "#3498DB",  # azzurro
+  "Marie Schrader"    = "#9B59B6",  # lilla
+  "Steven Gomez"      = "#16A085"   # verde acqua
+)
+
+default_grey <- "#B0B0B0"
+
+
+make_star_graph <- function(target_name) {
+  nt <- g_base %>% activate(nodes) %>% as_tibble() %>% mutate(id = row_number())
+  target_id <- nt %>% filter(name == target_name) %>% pull(id)
+  if (length(target_id) != 1) return(NULL)
+
+  ig <- as.igraph(g_base)
+  nbr_ids <- neighbors(ig, target_id, mode = "all") %>% as.integer()
+  keep_ids <- sort(unique(c(target_id, nbr_ids)))
+
+  g_star <- g_base %>%
+    activate(nodes) %>%
+    mutate(id = row_number()) %>%
+    filter(id %in% keep_ids) %>%
+    activate(edges) %>%
+    mutate(
+      Nome_from = .N()$name[from],
+      Nome_to   = .N()$name[to]
+    ) %>%
+    filter(Nome_from == target_name | Nome_to == target_name) %>%
+    activate(nodes) %>%
+    mutate(
+      is_target = (name == target_name),
+      is_top10  = name %in% names(top_cols),
+      node_fill = ifelse(is_top10, top_cols[name], default_grey),
+      node_fill = ifelse(is.na(node_fill), default_grey, node_fill),
+      node_size = ifelse(is_target, 9, 4.2)
+    )
+
+  g_star
+}
+
+plot_star <- function(g_star, target_name) {
+  if (is.null(g_star)) return(NULL)
+
+  set.seed(123)
+  lay <- ggraph::create_layout(g_star, layout = "kk")
+
+  tx <- lay$x[lay$name == target_name]
+  ty <- lay$y[lay$name == target_name]
+  lay$x <- lay$x - tx
+  lay$y <- lay$y - ty
+
+  ggraph(lay) +
+    geom_edge_link(
+      aes(edge_alpha = Totale),
+      edge_colour = "grey55",
+      edge_width  = 1.1
+    ) +
+    scale_edge_alpha(range = c(0.15, 0.85), guide = "none") +
+    geom_node_point(
+      aes(size = node_size, fill = node_fill),
+      shape  = 21,
+      colour = "black",
+      stroke = 1.1
+    ) +
+    scale_size_identity() +
+    scale_fill_identity() +
+    geom_node_text(
+      aes(label = name),
+      repel = TRUE,
+      size  = 5.2
+    ) +
+    theme_graph() +
+    ggtitle(paste0("Vicinato di ", target_name, " (archi incidenti al target)"))
+}
+
+has_edges <- function(g) {
+  tryCatch(nrow(g %>% activate(edges) %>% as_tibble()) > 0, error = function(e) FALSE)
+}
+
+nav_names <- nodes_tbl %>% pull(name)
+
+
+
+#------------------------------------------------------------
+
+# SVILUPPO DEL WIDGET
+
+
+tmp_dir <- file.path(tempdir(), "bb_star_nodes")
+dir.create(tmp_dir, showWarnings = FALSE)
+
+data_uris <- character(length(nav_names))
+
+for (i in seq_along(nav_names)) {
+  target <- nav_names[i]
+  g_star <- make_star_graph(target)
+
+  out_png <- file.path(tmp_dir, paste0("star_", sprintf("%03d", i), ".png"))
+
+  if (is.null(g_star) || !has_edges(g_star)) {
+    png(out_png, width = 1800, height = 1100, res = 200)
+    plot.new()
+    text(0.5, 0.55, paste("Nessun vicinato disponibile per:", target), cex = 2)
+    text(0.5, 0.45, "Il nodo è isolato nel grafo Totale (dopo i filtri).", cex = 1.2)
+    dev.off()
+  } else {
+    p <- plot_star(g_star, target)
+    ggsave(out_png, plot = p, width = 14, height = 9, dpi = 220)
+  }
+
+  data_uris[i] <- base64enc::dataURI(file = out_png, mime = "image/png")
+}
+
+# -----------------------------
+# 5) Widget HTML navigabile
+# -----------------------------
+widget_id <- "bb_star_widget"
+
+html <- tags$div(
+  id = widget_id,
+  style = "max-width: 1000px; margin: 0 auto;",
+
+  tags$div(
+    style = "display:flex; align-items:center; gap:10px; margin: 10px 0;",
+    tags$button("◀", id = paste0(widget_id, "_prev"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$button("▶", id = paste0(widget_id, "_next"),
+                style="padding:6px 12px; font-size:16px; cursor:pointer;"),
+    tags$span(id = paste0(widget_id, "_label"),
+              style="font-size:16px; opacity:0.85;")
+  ),
+
+  tags$img(
+    id = paste0(widget_id, "_img"),
+    src = data_uris[1],
+    style = "width:100%; height:auto; border-radius:10px;
+             box-shadow:0 2px 10px rgba(0,0,0,0.15); display:block;"
+  ),
+
+  tags$script(HTML(sprintf("
+    (function(){
+      const names = %s;
+      const uris  = %s;
+      let i = 0;
+
+      const img  = document.getElementById('%s_img');
+      const lab  = document.getElementById('%s_label');
+      const prev = document.getElementById('%s_prev');
+      const next = document.getElementById('%s_next');
+
+      function render(){
+        img.src = uris[i];
+        lab.textContent = names[i] + '  (' + (i+1) + '/' + names.length + ')';
+      }
+
+      prev.onclick = function(){
+        i = (i - 1 + names.length) %% names.length;
+        render();
+      };
+
+      next.onclick = function(){
+        i = (i + 1) %% names.length;
+        render();
+      };
+
+      render();
+    })();
+  ",
+    jsonlite::toJSON(nav_names),
+    jsonlite::toJSON(data_uris),
+    widget_id, widget_id, widget_id, widget_id
+  )))
+)
+
+htmltools::browsable(html)
+
+
+
+```
+
+### **Small-World**
+Dal grafo emerge la presenza di un’**unica grande componente connessa**, che include la totalità dei nodi della rete.
+
+Per verificare la presenza di una struttura di tipo small-world, analizziamo il **diametro della rete**, 
+ovvero la massima distanza geodetica tra due nodi, e lo confrontiamo con la dimensione complessiva del grafo.   
+
+Otteniamo un diametro contenuto (**4 archi massimo**), rispetto l’elevato numero di nodi e archi,
+*un qualsiasi nodo può essere raggiunto da un altro attraverso un numero ridotto di passaggi.*
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+library(tidygraph)
+library(ggraph)
+library(igraph)
+library(ggplot2)
+library(dplyr)
+
+g_main <- graph_bb
+
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+# --- 1) diametro e cammino di diametro (non pesato) ---
+g_ig <- as.igraph(g_main)
+
+diam_path_v <- igraph::get_diameter(g_ig, directed = FALSE, weights = NA)
+D <- length(diam_path_v) - 1
+
+# --- 2) marchio gli archi del cammino di diametro ---
+E(g_ig)$is_diameter <- FALSE
+
+v <- as.integer(diam_path_v)
+if (length(v) >= 2) {
+  vpairs <- c(rbind(v[-length(v)], v[-1]))
+  diam_eids <- igraph::get.edge.ids(g_ig, vpairs)
+  E(g_ig)$is_diameter[diam_eids] <- TRUE
+}
+
+# torno a tbl_graph (mantiene gli attributi archi)
+g_plot <- as_tbl_graph(g_ig)
+
+# numeri per titolo
+M <- igraph::ecount(g_ig)
+N <- igraph::vcount(g_ig)
+
+# --- 3) PLOT: evidenzio diametro in blu via aes() ---
+ggraph(g_plot, layout = "kk") +
+
+  geom_edge_link(
+    aes(
+      edge_colour = is_diameter,
+      edge_alpha  = is_diameter,
+      edge_width  = is_diameter
+    )
+  ) +
+  scale_edge_colour_manual(values = c("FALSE" = "grey80", "TRUE" = "blue"), guide = "none") +
+  scale_edge_alpha_manual(values  = c("FALSE" = 0.35,    "TRUE" = 0.90),  guide = "none") +
+  scale_edge_width_manual(values  = c("FALSE" = 0.8,     "TRUE" = 1.6),   guide = "none") +
+
+  geom_node_point(
+    aes(color = name == "Walter White"),
+    size = 3
+  ) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "black"), guide = "none") +
+
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 3
+  ) +
+
+  theme_graph() +
+  ggtitle(
+    "Rete delle co-presenze in Breaking Bad",
+    subtitle = paste0("Diametro = ", D)
+  )
+
+
+
+```
+
+### **transitività**
+
+Non tutti i collegamenti presenti nella rete hanno lo stesso significato narrativo:
+ad esempio, il **legame tra Walter White e un personaggio secondario** (es. studente x) è profondamente diverso da quello tra Walter e Skyler, nonostante in entrambi i casi esista una connessione diretta nel grafo.  
+
+
+Il triangolo rappresenta **un motif** ricorrente nelle reti reali ed è spesso associato a una maggiore robustezza strutturale:   
+
+un arco che partecipa a molti triangoli può essere considerato un **legame forte**, 
+poiché la sua eventuale rimozione non interromperebbe la connessione tra i nodi, grazie alla presenza di percorsi alternativi.  
+
+Al contrario, un arco che non appartiene ad alcun triangolo rappresenta un legame debole,  
+la cui rimozione può causare la separazione dei nodi coinvolti.  
+
+Un indicatore utile per valutare la forza strutturale dei legami è **la transitività**,  
+che misura la **tendenza dei nodi a formare triangoli.**
+
+```{r echo=FALSE}
+
+# TODO DA RIVEDERE
+
+# TRANSITIVITA'
+
+
+library(igraph)
+
+# converto il grafo in igraph
+ig <- as.igraph(graph_bb)
+
+# (consigliato) se vuoi ignorare archi con Totale/weight = 0, filtra prima:
+# ig <- as.igraph(graph_bb %>% activate(edges) %>% filter(!is.na(Totale) & Totale > 0))
+
+# 1) Transitivitá globale (clustering coefficient globale)
+trans_global <- transitivity(ig, type = "global")
+
+# 2) Transitivitá locale per nodo
+trans_local <- transitivity(ig, type = "local")
+
+# 3) Transitivitá locale media (ignoro NA: tipico per nodi con grado < 2)
+trans_local_mean <- mean(trans_local, na.rm = TRUE)
+
+# 4) Numero totale di triangoli nel grafo
+num_triangles <- sum(count_triangles(ig)) / 3
+
+# 5) Numero totale di triplette (connesse, non ordinate)
+deg <- degree(ig)
+num_triplets <- sum(deg * (deg - 1)) / 2
+
+# ---- OUTPUT ----
+cat("Transitivitá globale:", round(trans_global, 4), "\n")
+cat("Numero di triangoli:", num_triangles, "\n")
+cat("Numero di triplette:", num_triplets, "\n")
+
+
+```
+
+Otteniamo un valore di **transitività pari a circa il 25%**,\
+il che indica che la struttura della rete, di per sé, **non è particolarmente densa di triangoli**.
+
+Questo risultato può essere spiegato dal contesto narrativo della serie:\
+i personaggi **non tendono a formare continuamente nuovi triangoli con persone diverse**,\
+ma piuttosto a **ripetere più e più volte gli stessi triangoli** all’interno degli stessi **contesti sociali**.
+
+Di conseguenza, la forza delle relazioni non emerge tanto dal numero di triangoli distinti,\
+quanto dall’**intensità con cui gli stessi legami vengono ripetuti nel tempo**,\
+aumentando così il **peso degli archi** in quello stesso triangolo.
+
+
+### **RETE SCALE FREE**
+
+Dall’analisi strutturale emergono in sintesi i seguenti risultati:
+
+- Distribuzione dei gradi di tipo power law, con forte asimmetria a destra (skewness = 4.19);
+- Struttura small-world, con diametro pari a 4;
+- Transitività globale bassa, pari a 0.25.
+
+**Caratteristiche di una rete scale-free!**  
+  
+In una rete scale-free, i nuovi nodi tendono a collegarsi secondo un meccanismo di **attaccamento preferenziale,** 
+per cui la probabilità di connessione a un nodo esistente aumenta all’aumentare del suo grado.   
+  
+Questo processo porta alla formazione di **pochi hub con grado molto elevato**, responsabili della distribuzione dei gradi di tipo power law, della riduzione delle distanze geodesiche e di una bassa transitività, poiché i nuovi nodi tendono a collegarsi agli hub piuttosto che tra loro.
+
+Questo comportamento **rispecchia perfettamente il caso della nostra rete**: 
+nel corso degli episodi vengono **introdotti nuovi personaggi** che, per esigenze narrative,  
+risultano più **propensi a interagire con i protagonisti principali** (nodi già altamente connessi)  
+piuttosto che con personaggi secondari.
+
+## Centralità
+
+A questo punto vogliamo capire chi sia il **vero nodo centrale** della rete, cioè chi ricopre un **ruolo** più “strategico” nella struttura.\
+Con la **degree centrality** abbiamo già visto che **Walter White** risulta primo, ma questo non implica necessariamente\
+che sia il più importante anche secondo altri criteri.
+
+### **Betweenness centrality**
+
+La **betweenness centrality** misura quante volte un nodo si trova “in mezzo” ai cammini minimi tra gli altri nodi:\
+in pratica quantifica quanto un personaggio funzioni da **ponte** tra gruppi diversi.
+
+Walter è ovviamente un nodo fondamentale, ma è interessante verificare se esistono personaggi che collegano\
+meglio i sottogruppi della rete (DEA, cartello, avvocati, criminali minori, famiglia, scuola…).
+
+Ad esempio, se un membro del **cartello** dovesse entrare in contatto con qualcuno legato alla **DEA**,\
+è plausibile che il collegamento passi attraverso nodi “di intermediazione”, come **Don Eladio** o **Mike Ehrmantraut**,\
+personaggi che interagiscono con ambienti molto diversi tra loro e che fungono da punti di raccordo tra sottoreti differenti.
+
+
+```{r echo=FALSE}
+
+
+# CALCOLIAMO LE BETWEENNESS CENTRALITY
+
+
+
+  library(tidygraph)
+  library(dplyr)
+  library(ggplot2)
+
+
+# aggiungo al mio dataframe dei nodi il valore della betweeness centrality 
+# Normalizzata per il valore massimo che è =  (n-1)*(n-2) / 2
+
+
+g_bc <- g_tot %>%
+  activate(nodes) %>%
+  mutate(
+    betweenness = centrality_betweenness(normalized = TRUE)
+  ) %>%
+  as_tibble() %>%
+  mutate(
+    rank_degree = dense_rank(desc(deg)),            # estraggo il rank in base ai valori degree_centrality
+    rank_betw   = dense_rank(desc(betweenness))      # estraggo il rank in base ai valori betweenees_centrality
+  )
+
+
+#-------------------------------------
+
+# VISUALIZZO I PRIMI 10 NODI, CON RANK MAGGIORE
+
+
+top10_bc <- g_bc %>%
+  arrange(desc(betweenness)) %>%
+  slice_head(n = 10)
+
+
+
+
+ggplot(
+  top10_bc,
+  aes(
+    x = reorder(name, betweenness),
+    y = betweenness
+  )
+) +
+  geom_col(fill = "#2C3E50", width = 0.7) +
+  coord_flip() +
+  geom_text(
+    aes(
+      label = paste0("deg rank: ", rank_degree)   # accanto aggiungo un etichetto con il rank del degree_centrality 
+    ),
+    hjust = -0.05,
+    size = 4
+  ) +
+  labs(
+    title = "Top 10 nodi per Betweenness Centrality",
+    subtitle = "Confronto con il rank di Degree Centrality",
+    x = "Personaggio",
+    y = "Betweenness centrality (normalizzata)"
+  ) +
+  theme_minimal(base_size = 14) +
+  expand_limits(y = max(top10_bc$betweenness) * 1.15)
+
+
+```
+
+La **betweenness** misura quanto un nodo sia “inevitabile” nei percorsi della rete, cioè quanto spesso si trova **in mezzo** ai cammini minimi tra gli altri personaggi.\
+Per questo motivo non sorprende vedere **Walter White** e **Jesse Pinkman** ai primi posti: essendo i protagonisti, interagiscono con quasi tutti i sottogruppi narrativi.
+
+È invece più interessante osservare come cambiano le posizioni **subito dopo** i protagonisti.\
+Notiamo, ad esempio, che **Don Eladio** guadagna molte posizioni: è un nodo **nevralgico** perché collega la rete principale al gruppo dei **capi del cartello**, che spesso compaiono in scene quasi solo tra loro e con lui che fa da ponte verso il resto della rete.
+
+In quanto “capo dei capi”, Don Eladio comunica con figure come **Gustavo Fring**, fungendo da ponte tra livelli diversi dell’organizzazione criminale.
+
+Come previsto, anche **Mike Ehrmantraut** risulta molto centrale: lavorando come sicario tra ambienti differenti (in particolare tra il mondo di **Saul** e quello di **Gustavo**), diventa un canale efficace di collegamento tra gruppi criminali diversi e questo gli fa recuperare posizioni nella classifica.
+
+Al contrario, la posizione di **Skyler White** tende a scendere: pur essendo importante nella trama, rimane quasi sempre nel **contesto familiare** e raramente entra in contatto diretto con i gruppi criminali, evidenziando anche quanto **Walter cerchi di tenerla “fuori” da quel mondo.**
+
+### **Closeness centrality**
+
+Misura quanto velocemente un nodo può raggiungere tutti gli altri nodi della rete,\
+ovvero la **distanza media** che lo separa dal resto dei personaggi.
+
+In questo contesto, possiamo interpretarla come la capacità di **far circolare un messaggio nel minor numero di passaggi**.\
+Ad esempio, se un membro di un gruppo criminale volesse far arrivare un’informazione a qualcuno legato alla **polizia** in modo anonimo,\
+facendola passare di persona in persona, la closeness ci indica **quale nodo permetterebbe al messaggio di arrivare più rapidamente** all’intera rete.
+
+```{r echo=FALSE}
+
+# CALCOLO E VISUALIZZO LA CLOSENESS CENTRALITY
+
+
+  library(tidygraph)
+  library(dplyr)
+  library(ggplot2)
+
+
+
+g_cl <- g_tot %>%
+  activate(nodes) %>%
+  mutate(
+    closeness = centrality_closeness(normalized = TRUE)  # calcolo la closeness centraliy
+  ) %>%
+  as_tibble() %>%
+  mutate(
+    rank_degree = dense_rank(desc(deg)),         # aggiungo una colonna con i rank per degree_centrality
+    rank_close  = dense_rank(desc(closeness))    # aggiungo una colonna con i rank per la closeness_centrality
+  )
+
+
+
+#---------------------------------------
+
+# VISUALIZZO I 10 NODI CON UNA CLOSENESS CENTRALITY MAGGIORE
+
+
+top10_cl <- g_cl %>%
+  arrange(desc(closeness)) %>%
+  slice_head(n = 10)
+
+
+# 4) Visualizzazione: closeness + confronto con rank degree
+ggplot(
+  top10_cl,
+  aes(
+    x = reorder(name, closeness),
+    y = closeness
+  )
+) +
+  geom_col(fill = "#117A65", width = 0.7) +
+  coord_flip() +
+  geom_text(
+    aes(label = paste0("deg rank: ", rank_degree)),
+    hjust = -0.05,
+    size = 4
+  ) +
+  labs(
+    title = "Top 10 nodi per Closeness Centrality",
+    subtitle = "Chi raggiunge più rapidamente tutti gli altri nodi (confronto con Degree)",
+    x = "Personaggio",
+    y = "Closeness centrality (normalizzata)"
+  ) +
+  theme_minimal(base_size = 14) +
+  expand_limits(y = max(top10_cl$closeness) * 1.15)
+
+
+```
+
+Anche in questo caso non è particolarmente significativo soffermarsi sui primi nodi (semore i protagonisti).\
+È più interessante osservare chi **guadagna posizioni** rispetto alla classifica per grado.
+
+Senza sorpresa, **Gustavo Fring** sale di circa **due posizioni**, evidenziando quanto sia centrale il suo ruolo nel sistema di **distribuzione della droga**:\
+essendo un punto di raccordo tra persone e ambienti diversi, risulta “vicino” a gran parte della rete e quindi capace di raggiungere rapidamente molti personaggi.\
+(Basti pensare che la sua **copertura di proprietario del FastFood**, gli permette di interagire con molte realtà direttamente, alla luce del sole, per esempio come sponsor ufficiale della DEA, incontrando direttamente persino il capo di essa.)
+
+Un esempio narrativo coerente con la sua closeness eleavata, è l’episodio in cui viene fatto arrivare un avvertimento a **Hank** per **salvarlo dal tentato omicidio** da parte dei **gemelli Salamanca**: in situazioni di questo tipo la rapidità del collegamento (in pochi passaggi) è cruciale.  
+
+Anche **Saul Goodman** sale di posizione, dimostrando la sua centralità nel mondo criminale.
+
+### **Power**
+
+Come ultima misura di centralità, è interessante considerare una metrica legata al **“potere”** nella rete.\
+L’idea è individuare i personaggi che risultano influenti perché **circondati da nodi meno influenti** (ad esempio *sottoposti* o “minion”, contatti marginali); un maggior numero di sottoposti porta a un potere maggiore.
+
+In questa lettura, il *power* aiuta a rispondere a una domanda intuitiva:\
+**chi è il “boss” più boss**, quello che controlla/coordina una rete di relazioni composta soprattutto da nodi subordinati?\
+(intuitivamente penseremmo a Gustavo fring o al capo del cartello)
+
+```{r echo=FALSE}
+
+# TODO : RINCONTROLLARE (iterazioni pari, dispari ?, sto eseguendo sul grafo pesato o no ?)
+
+# CALCOLO E VISUALIZZAZIONE DELLA POWER
+
+
+
+  library(tidyverse)
+  library(tidygraph)
+  library(igraph)
+  library(lpSolve)    # ci serve per risolvere il sistema lineare nel test della regolarizzabilità
+
+
+#----------------------------------
+
+# estraggo il grafo e lo metto come oggeto igraph (devo lavorare con le matrici di adiacenza e incidenza)
+
+ig_base <- as.igraph(graph_bb)
+
+#------------------------------
+
+# Funzione che estrae la matrice di incidenza 
+# righe = nodi, colonne = archi indicizzati  -> Aij = 1 se il nodo i è un estremo del nodo j
+
+# Come da definizione di power, il grafo estratto e' quello non pesato
+
+make_incidence <- function(ig) {
+  n <- vcount(ig)
+  m <- ecount(ig)
+  Eends <- ends(ig, E(ig), names = FALSE)
+
+  B <- matrix(0L, nrow = n, ncol = m)
+  for (j in seq_len(m)) {
+    B[Eends[j, 1], j] <- 1L
+    B[Eends[j, 2], j] <- 1L
+  }
+  rownames(B) <- V(ig)$name
+  colnames(B) <- paste0("e", seq_len(m))
+  B
+}
+
+#--------------------------
+
+# L'ALGORITMO ITERATIVO PER IL CALCOLO DELLA POWER ARRIVA A CONVERGENZA (solo su iterate pari o dispare)
+#   SOLO SE IL GRAFO SU CUI SI APPLICA E' REGOLARIZZABILE
+
+# REGOLARIZZABILE = se posso aggiungere dei pesi positivi agli archi, in modo che tutti i nodi abbiano grado pesato uguale = r
+
+# Quindi deve risolvere questo sistema lineare Bw = re  (cioè io devo trovare w, vettore di pesi per ogni nodo, che risolve il sistema)
+
+
+ # B  la matrice di incidenza del grafo (dimensione )
+ # w  è un vettore di lunghezza contenente i pesi positivi degli archi.
+ # r  è il grado di regolarizzazione, ovvero il valore comune a cui devono essere resi uguali i gradi pesati di tutti i nodi.
+ # e  è il vettore colonna di tutti 1.
+
+
+# FUNZIONE CHE TI DICE SE IL GRAFO E' REGOLARIZZABILE
+# se non è regolarizzabile torna "NULL" se lo è invece torna w e r (matrice dei pesi e il grado uguale per tutti)
+
+is_regularizable <- function(ig) {
+  B <- make_incidence(ig)
+  n <- nrow(B)
+  m <- ncol(B)
+
+  ones_m <- rep(1, m)
+  rhs_eq <- -as.numeric(B %*% ones_m)
+
+  const_eq  <- cbind(B, rep(-1, n))
+  dir_eq    <- rep("=", n)
+  rhs_eq    <- rhs_eq
+
+  # (B) u >= 0  -> -u <= 0
+  const_u   <- cbind(-diag(m), rep(0, m))
+  dir_u     <- rep("<=", m)
+  rhs_u     <- rep(0, m)
+
+  # (C) r >= 0  -> -r <= 0
+  const_r   <- matrix(0, nrow = 1, ncol = m + 1)
+  const_r[1, m + 1] <- -1
+  dir_r     <- "<="
+  rhs_r     <- 0
+
+  const.mat <- rbind(const_eq, const_u, const_r)
+  const.dir <- c(dir_eq, dir_u, dir_r)
+  const.rhs <- c(rhs_eq, rhs_u, rhs_r)
+
+  obj <- rep(0, m + 1)  
+
+  sol <- lp(
+    direction    = "min",
+    objective.in = obj,
+    const.mat    = const.mat,
+    const.dir    = const.dir,
+    const.rhs    = const.rhs
+  )
+
+  ok <- (sol$status == 0)
+  if (!ok) return(list(ok = FALSE))
+
+  u <- sol$solution[1:m]
+  r <- sol$solution[m + 1]
+  w <- u + 1
+
+  check <- as.numeric(B %*% w)
+  list(ok = TRUE, r = r, w = w, check_range = range(check))
+}
+
+
+# SE IL GRAFO NON E' REGOLARIZZABILE BISOGNERA' EFFETTUARE UNA PERTURBAZIONE 
+
+# -----------------------------
+
+# EFFETTUARE UNA PERTURBAZIONE AL GRAFO
+# cioè viene aggiunto un piccolo peso eps = 0.1 alla diagonale (creo dei self loop di peso basso)
+# questo permetterà di trovare una soluzione al sistema
+
+# Funzione che effettua la perturbazione
+
+perturb_graph_eps <- function(ig, eps = 0.1) {
+  A <- as.matrix(igraph::as_adjacency_matrix(ig, attr = "Totale", sparse = FALSE))
+  A[is.na(A)] <- 0
+  A_eps <- A + diag(eps, nrow(A))   # !! qui somma la perturbazione con i pesi degli archi
+
+  ig_eps <- graph_from_adjacency_matrix(
+    A_eps, mode = "undirected", weighted = TRUE, diag = TRUE
+  )
+  V(ig_eps)$name <- V(ig)$name
+  ig_eps
+}
+
+
+# -----------------------------
+
+# FUNZIONE CHE ESEGUE L'ALGORITMO ITERATIVO PER IL CALCOLO DELLA POWER
+# dopo che ho reso regolarizzbile questo converge a valori definiti 
+
+# il test di regolarizzabilità è fatto col matrice di incidenza => NON PESATA (per def di grafo regolarizzabile)
+# qui allora userò i pesi del grafo + la perturbazione (la somma viene fatta nella funzione precedente)
+
+
+power_g <- function(ig, t = 6) {
+  A <- as.matrix(igraph::as_adj(ig, attr = "weight", sparse = FALSE))
+  A[is.na(A)] <- 0
+
+  n <- nrow(A)
+  x0 <- rep(0, n)
+  x1 <- rep(1, n)
+  x2 <- rep(1, n)
+
+  diff <- 1
+  eps  <- 1 / 10^t
+  iter <- 0
+
+  while (diff > eps) {
+    x0 <- x1
+    x1 <- x2
+    x2 <- as.numeric((1 / x2) %*% A)
+    diff <- sum(abs(x2 - x0))
+    iter <- iter + 1
+    if (iter > 50000) break
+  }
+
+  alpha <- as.numeric(((1 / x2) %*% A[, 1]) / x2[1])
+  x2 <- sqrt(alpha) * x2
+
+  list(vector = x2, iter = iter, diff = diff)
+}
+
+
+# -----------------------------
+
+# ESEGUO L'INTERO CODICE E VISUALIZZO I RISULTATI
+
+
+#cat(">> Test regolarizzabilità sul grafo base...\n")
+reg0 <- is_regularizable(ig_base)
+
+use_ig <- ig_base
+used_eps <- 0
+
+if (!isTRUE(reg0$ok)) {
+  #cat("!! Grafo base NON regolarizzabile. Applico perturbazione diagonale...\n")
+
+  eps_grid <- c(0.01, 0.05, 0.1, 0.2, 0.5, 1)
+  ok_found <- FALSE
+
+  for (eps in eps_grid) {
+    ig_try <- perturb_graph_eps(ig_base, eps = eps)
+    reg_try <- is_regularizable(ig_try)
+
+    if (isTRUE(reg_try$ok)) {
+      use_ig <- ig_try
+      used_eps <- eps
+      ok_found <- TRUE
+      #cat(sprintf(">> OK: regolarizzabile dopo perturbazione eps = %g\n", eps))
+      break
+    }
+  }
+
+  if (!ok_found) {
+    stop("Non riesco a rendere regolarizzabile il grafo nemmeno con eps fino a 1.")
+  }
+} else {
+  cat(">> Grafo base regolarizzabile (trovati w>=1 e r).\n")
+}
+
+#cat(">> Calcolo power iterativa...\n")
+res_power <- power_g(use_ig, t = 6)
+
+df_power_top10 <- tibble(
+  name  = V(use_ig)$name,
+  power = as.numeric(res_power$vector)
+) %>%
+  arrange(desc(power)) %>%
+  slice_head(n = 10) %>%
+  mutate(rank_power = row_number()) %>%
+  select(rank_power, name, power)
+
+#cat("\n--- INFO ---\n")
+#cat("Perturbazione eps usata:", used_eps, "\n")
+#cat("Iterazioni power:", res_power$iter, "\n")
+#cat("Diff finale:", res_power$diff, "\n\n")
+
+df_power_top10
+
+```
+
+Purtroppo, con un grado così elevato, **Walter** risulta avvantaggiato anche in questa misura:\
+essendo connesso a moltissimi nodi “periferici” (e quindi relativamente deboli), accumula **molto potere** nella rete.
+
+È però più interessante osservare come **Saul Goodman** guadagni posizioni:\
+il suo ruolo da avvocato lo porta a orbitare attorno a molte figure **poco influenti**, che dipendono da lui per “muoversi” nel sistema.\
+In particolare, Saul è spesso affiancato da personaggi come **Patrick Kuby** e **Huell Babineaux**,\
+oltre a diversi clienti e contatti marginali, che contribuiscono a far emergere il suo **potere strutturale**.
+
+## Analisi delle comunità
+
+In *Breaking Bad* emergono chiaramente **strutture e gruppi ben definiti**,\
+come i **cartelli del narcotraffico**, la **DEA**, l’ambiente della **scuola** e la **famiglia White**.
+
+L’obiettivo di questa analisi è **estrarre automaticamente queste comunità**\
+utilizzando un **clustering gerarchico**, basato su una misura di **similarità** tra i personaggi.\
+In particolare, adotteremo la **similarità coseno**, che permette di confrontare i nodi in comune nel proprio vicinato.
+
+In questo modo, i personaggi che interagiscono in modo simile con il resto della rete\
+tenderanno a essere assegnati alla **stessa comunità**:\
+un esempio intuitivo è rappresentato dalla **banda di Tuco** o dal **cartello**,\
+i cui membri condividono gran parte delle relazioni e delle co-presenze.
+
+*(l'obbiettivo è estrarre con il clustering i gruppi più simili possibile alla realtà)*
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+# TODO : DA RICONTROLLARE
+
+library(tidyverse)
+library(tidygraph)
+library(igraph)
+library(ggraph)
+
+# ==============
+# 1) scegli K
+# ==============
+K <- 24
+# ==========================
+# 2) grafo totale "pulito"
+# ==========================
+g_tot <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes) %>%
+  mutate(deg_tmp = centrality_degree()) %>%
+  filter(deg_tmp > 0) %>%
+  select(-deg_tmp)
+
+ig <- as.igraph(g_tot)
+
+# ==========================================
+# 3) clustering su matrice di adiacenza (A)
+#    (solo struttura del grafo)
+# ==========================================
+A <- as.matrix(as_adjacency_matrix(ig, sparse = FALSE))
+hc <- hclust(dist(A), method = "complete")
+membership <- cutree(hc, k = K)
+
+# attacco la community ai nodi
+g_comm <- g_tot %>%
+  activate(nodes) %>%
+  mutate(community = factor(membership[match(name, V(ig)$name)]))
+
+# ==========================
+# 4) plot communities
+# ==========================
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+ggraph(g_comm, layout = "kk") +
+  geom_edge_link(colour = "grey80", alpha = 0.25, width = 0.8) +
+  geom_node_point(aes(fill = community), shape = 21, colour = "black", stroke = 0.8, size = 3.6) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+  theme_graph() +
+  ggtitle(paste0("Clustering sul grafo totale | K = ", K))
+
+
+
+```
+
+**La distribuzione dei cluster è corretta, ma non rappresenta i gruppi “reali”**
+
+Il clustering basato **solo** sulla struttura del grafo **totale** tende a raggruppare i nodi in base alla *similitudine del loro vicinato*.\
+Questo è coerente dal punto di vista matematico, ma può produrre cluster poco interpretabili narrativamente:\
+due personaggi possono finire nello stesso gruppo anche se **non hanno alcun legame diretto**, semplicemente perché hanno condiviso\
+(magari poche volte) gli stessi contatti.
+
+In altre parole, il metodo “vede” **pattern simili di collegamenti**, ma non distingue bene *il contesto* in cui questi collegamenti avvengono.
+
+### **Sfruttare l’associazione agli episodi per il clustering**
+
+Un idea per ottenere community più realistiche è sfruttare l’informazione **episodio per episodio**:\
+invece di descrivere un personaggio solo tramite “chi incontra”, lo descriviamo tramite **quando** (in quali episodi) è attivo e con che intensità.
+
+Costruiamo quindi, per ogni nodo, un **profilo temporale**:
+
+-   per ogni episodio, calcoliamo la **somma dei pesi** degli archi incidenti al personaggio in quell’episodio\
+-   otteniamo una matrice *nodi × episodi*, dove ogni riga è la “firma” temporale del personaggio
+
+Su questa tabella applichiamo:
+
+1.  **Similarità coseno** (confronta la forma del profilo, non solo la quantità totale)\
+2.  **Clustering gerarchico** (complete-link), tagliato a un valore **K** scelto da noi
+
+In questo modo, vengono raggruppati insieme i personaggi che **compaiono negli stessi archi narrativi**, cioè che “vivono” gli episodi in modo simile (cartello, DEA, scuola, famiglia, ecc.).
+
+*(Non stiamo più analizzando la similutidine nel senso "frequentiamo le stesse persone", ma "frequentiamo gli stessi episodi")*
+
+```{r echo=FALSE}
+
+# TODO : DA RIVEDERE (come viene creata questa tabella nomixepisodi)
+
+# DEFINIAMO E VISUALIZZIAMO IL CLUSTERING
+
+  library(tidyverse)
+  library(tidygraph)
+  library(igraph)
+  library(ggraph)
+  library(stringr)
+
+#--------------------------------------------------------------------
+
+# TAGLIO K, NUMERO DI CLUSTER CHE PRENDO IN CONSIDERAZIONE
+
+K <- 24
+
+# codice simile a prima
+
+# Estraggo il grafo pulito
+g_tot <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes) %>%
+  mutate(deg_tmp = centrality_degree()) %>%
+  filter(!is.na(deg_tmp) & deg_tmp > 0) %>%
+  select(-deg_tmp)
+
+ig <- as.igraph(g_tot)    # trasformo in un oggetto igraph (funzioni apposite)
+node_names <- V(ig)$name  # lista dei nomi
+n <- vcount(ig)           # numero di nodi
+
+
+# ESTRAGGO GLI ARCHI DAL GRAFO 
+
+edge_tbl <- g_tot %>% activate(edges) %>% as_tibble()
+
+# estraggo lista nomi episodi
+ep_cols <- names(edge_tbl)[str_detect(names(edge_tbl), "^\\d{2}S\\d+$")]
+
+# riordino la lista degli episodi (ordine corretto)
+ep_order <- tibble(col = ep_cols) %>%
+  mutate(
+    ep_num = as.integer(str_extract(col, "^\\d{2}")),
+    season = as.integer(str_extract(col, "(?<=S)\\d+$"))
+  ) %>%
+  arrange(season, ep_num) %>%
+  pull(col)
+
+#---------
+
+ # estrggo gli archi con il peso episodio per episodio, nel ordine corretto
+
+edges <- g_tot %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  select(from, to, all_of(ep_order))
+
+# ----------------------------------
+
+
+
+# GENERO LA MATRICE NODI x EPISODI
+
+m <- length(ep_order)
+X <- matrix(0, nrow = n, ncol = m)
+colnames(X) <- ep_order
+rownames(X) <- node_names
+
+for (j in seq_along(ep_order)) {    # PER OGNI EPISODIO (COLONNA)
+  w <- edges[[ep_order[j]]]         # vettore scene per quel episodio
+  w[is.na(w)] <- 0
+
+  acc_from <- numeric(n); 
+  acc_to <- numeric(n)      
+
+  rsf <- rowsum(w, edges$from, reorder = FALSE)
+  rst <- rowsum(w, edges$to,   reorder = FALSE)
+
+  acc_from[as.integer(rownames(rsf))] <- rsf[, 1]
+  acc_to[as.integer(rownames(rst))]   <- rst[, 1]
+
+  X[, j] <- acc_from + acc_to
+}
+
+X[1:6, 1:9]
+
+
+```
+
+**Questa è la matrice nodi per episodi**\
+**Ogni riga è il vettore che rappresenta il profilo temporale del nodo, applicherò tra questi vettori la similutidine coseno**
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+#--------------------------------------------
+
+# APPLICO IL COSENO 
+
+norms <- sqrt(rowSums(X^2))
+norms[norms == 0] <- 1e-12
+
+S <- (X %*% t(X)) / (norms %o% norms)
+diag(S) <- 1
+D <- as.dist(1 - S)
+
+
+#------------------------------------------------
+
+# APPLICO IL CLUSTERING GERARCHICO
+
+
+hc <- hclust(D, method = "complete")
+membership <- cutree(hc, k = K)
+
+
+#-------------------------------------------------
+
+# PLOTTO LE CLASSI TROVATE
+
+
+g_comm <- g_tot %>%
+  activate(nodes) %>%
+  mutate(community = factor(membership[match(name, node_names)]))
+
+
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+ggraph(g_comm, layout = "kk") +
+  geom_edge_link(colour = "grey80", alpha = 0.28, width = 0.8) +
+  geom_node_point(aes(fill = community), shape = 21, colour = "black", stroke = 0.9, size = 3.6) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.1) +
+  theme_graph() +
+  ggtitle(paste0("Community via hclust + coseno | K = ", K))
+
+
+
+```
+
+*(Effettivamente la tecnica tende a essere più realistica, in quanto è più probabile che i "gruppi narrativi" siano neglistessi episodi)*\
+*Ovviamentre si sta considerando 2 misure diverse, non c'è una misura giusta e una sbagliata*
+
+**Considerazioni sul clustering**
+
+Ovviamente, un’analisi di clustering basata **solo** sulla struttura di un grafo riassuntivo non può essere del tutto realstica!
+
+**Entrambi gli algoritmi** sono costretti a **imporre** dei gruppi anche quando, in senso stretto, non esistono comunità “reali” ben definite.\
+In una serie TV, infatti, i gruppi reali sono spesso determinati da **strutture sociali** (famiglia, lavoro, criminalità, forze dell’ordine) e da **convenzioni narrative**.
+
+Con questa tecnica aggiuntiva basata sui **dati episodio per episodio**, invece, possiamo ottenere comunità leggermente più credibili.\
+Impostando un taglio a **K = 24** comunità, emerge una struttura complessivamente **vicina alla realtà narrativa**.
+
+È importante ricordare che la **similarità coseno** non dipende dalla “vicinanza” diretta tra due personaggi,\
+ma dal **profilo delle loro interazioni**: due individui risultano simili se tendono a comparire (e co-presenziare) con **le stesse persone**.\
+In altre parole, *se due personaggi “frequentano” gli stessi ambienti e lo stesso giro di contatti, allora il loro profilo è simile*.
+
+Questo spiega perché possono formarsi cluster come il **18**, che include l’intera **famiglia Tyree**,\
+ma anche **Clovis**, che a prima vista sembra fuori contesto. In realtà, Clovis interagisce con gli stessi personaggi chiave, o è presente nello stesso episodio di (**Jesse**, **Walter** e **Badger**, amico di Jesse), e quindi finisce nello stesso gruppo.
+
+Infine, il clustering evidenzia anche un **nucleo centrale** (**comunità 1**), composto dai membri principali del cast:\
+è il gruppo che funge da “spina dorsale” della rete e attorno a cui ruotano la maggior parte delle interazioni.
+
+### **Modularità**
+
+In questa analisi ho scelto **K = 24** in modo *euristico*, perché a livello qualitativo sembrava restituire comunità\
+più coerenti con i gruppi “reali” della serie (cartello, DEA, famiglia, scuola, ecc.), rispetto ad altri valori di K.
+
+Solo successivamente ho calcolato la **modularità** per diversi tagli e ho verificato che **K = 24** è anche tra i valori\
+che forniscono una modularità migliore.
+
+In altre parole, con **K = 24** la rete risulta suddivisa in comunità in cui gli **archi interni**\
+sono **molto vicino a quello che ci si aspetterebbe** , segnale che con questo taglio è stata scelta una buona ripartizione.
+
+```{r echo=FALSE}
+
+# TODO : DA RIVEDERE
+
+
+# Top-5 K per modularità 
+
+
+  library(tidyverse)
+  library(tidygraph)
+  library(igraph)
+
+# --- 0) Grafo "Totale" (solo archi > 0) ---
+g_base <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes)
+
+ig <- as.igraph(g_base)
+
+# --- 1) Matrice profili per nodo: righe = nodi, colonne = episodi (01S1, 02S1, ...) ---
+edge_tbl <- g_base %>% activate(edges) %>% as_tibble()
+
+ep_cols <- names(edge_tbl)[stringr::str_detect(names(edge_tbl), "^\\d{2}S\\d+$")]
+if (length(ep_cols) == 0) stop("Non trovo colonne episodio (pattern atteso: 01S1, 02S1, ...).")
+
+# ricostruisco la tabella archi con nomi nodo
+edge_tbl <- g_base %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  mutate(
+    Nome_from = g_base %>% activate(nodes) %>% as_tibble() %>% pull(name) %>% .[from],
+    Nome_to   = g_base %>% activate(nodes) %>% as_tibble() %>% pull(name) %>% .[to]
+  )
+
+nodes_names <- g_base %>% activate(nodes) %>% as_tibble() %>% pull(name)
+
+# profilo(i,ep) = somma dei pesi episodio sugli archi incidenti al nodo i
+prof_long <- bind_rows(
+  edge_tbl %>% select(node = Nome_from, all_of(ep_cols)),
+  edge_tbl %>% select(node = Nome_to,   all_of(ep_cols))
+) %>%
+  pivot_longer(cols = all_of(ep_cols), names_to = "episode", values_to = "w") %>%
+  mutate(w = replace_na(w, 0)) %>%
+  group_by(node, episode) %>%
+  summarise(w = sum(w), .groups = "drop")
+
+prof_wide <- prof_long %>%
+  pivot_wider(names_from = episode, values_from = w, values_fill = 0) %>%
+  arrange(match(node, nodes_names))
+
+X <- as.matrix(prof_wide %>% select(-node))
+rownames(X) <- prof_wide$node
+
+# --- 2) Distanza coseno + hclust ---
+cosine_dist <- function(M) {
+  M <- as.matrix(M)
+  nrm <- sqrt(rowSums(M * M))
+  nrm[nrm == 0] <- 1
+  M2 <- M / nrm
+  S <- M2 %*% t(M2)                # similarità coseno
+  D <- 1 - S
+  diag(D) <- 0
+  as.dist(D)
+}
+
+d_cos <- cosine_dist(X)
+hc <- hclust(d_cos, method = "average")  # puoi usare anche "complete" se vuoi più separazione
+
+# --- 3) Modularità per K + Top 5 ---
+# range K: puoi allargarlo o restringerlo
+K_min <- 2
+K_max <- min(60, nrow(X) - 1)
+
+mods <- tibble(
+  k = K_min:K_max
+) %>%
+  mutate(
+    modularity = map_dbl(k, function(K) {
+      memb <- cutree(hc, k = K)
+      igraph::modularity(ig, membership = memb, weights = E(ig)$Totale)
+    })
+  ) %>%
+  arrange(desc(modularity))
+
+top5_k <- mods %>% slice_head(n = 5)
+top5_k
+
+
+```
+
+### **Similarità**
+
+Un altro punto di vista interessante è individuare **quali nodi risultano più simili tra loro**\
+(tendono ad appartenere allo stesso cluster).
+
+In questo contesto, due personaggi sono considerati simili se **frequentano le stesse persone**,\
+ovvero se presentano pattern di interazione molto simili con il resto della rete.\
+Per misurare questa affinità utilizziamo la **similarità di Pearson**, che confronta i profili dei nodi\
+e mette in evidenza relazioni “strutturali” anche in assenza di un contatto diretto.
+
+```{r echo=FALSE}
+
+# TODO : DA RIVEDERE
+
+# VISUALIZZARE I NODI PIU SIMILI TRA LORO TRAMITE INDICE DI PEARSON
+# (elimino dalla visualizzazione i nodi ripetuti per migliorare la classifica)
+
+
+  library(tidyverse)
+  library(tidygraph)
+  library(igraph)
+
+
+# -----------------------------
+# 0) Grafo base (solo archi Totale > 0)
+# -----------------------------
+g_base <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes)
+
+ig <- as.igraph(g_base)
+
+# -----------------------------
+# 1) Matrice profili episodici per nodo (righe=nodi, colonne=episodi)
+# -----------------------------
+edge_tbl_raw <- g_base %>% activate(edges) %>% as_tibble()
+ep_cols <- names(edge_tbl_raw)[stringr::str_detect(names(edge_tbl_raw), "^\\d{2}S\\d+$")]
+if (length(ep_cols) == 0) stop("Non trovo colonne episodio (pattern atteso: 01S1, 02S1, ...).")
+
+nodes_df <- g_base %>% activate(nodes) %>% as_tibble() %>% select(name)
+
+edge_tbl <- edge_tbl_raw %>%
+  mutate(
+    Nome_from = nodes_df$name[from],
+    Nome_to   = nodes_df$name[to]
+  )
+
+nodes_names <- nodes_df$name
+
+# profilo(i,ep) = somma dei pesi dell'episodio sugli archi incidenti al nodo i
+prof_long <- bind_rows(
+  edge_tbl %>% select(node = Nome_from, all_of(ep_cols)),
+  edge_tbl %>% select(node = Nome_to,   all_of(ep_cols))
+) %>%
+  pivot_longer(cols = all_of(ep_cols), names_to = "episode", values_to = "w") %>%
+  mutate(w = replace_na(w, 0)) %>%
+  group_by(node, episode) %>%
+  summarise(w = sum(w), .groups = "drop")
+
+prof_wide <- prof_long %>%
+  pivot_wider(names_from = episode, values_from = w, values_fill = 0) %>%
+  arrange(match(node, nodes_names))
+
+X <- as.matrix(prof_wide %>% select(-node))
+rownames(X) <- prof_wide$node
+
+# -----------------------------
+# 2) Pearson similarity tra nodi (sui profili episodici)
+# -----------------------------
+pearson_sim <- cor(t(X), method = "pearson", use = "pairwise.complete.obs")
+
+# porto in formato lungo + tolgo duplicati (A,B) vs (B,A) + diagonale
+sim_tbl <- as.data.frame(as.table(pearson_sim), stringsAsFactors = FALSE)
+colnames(sim_tbl) <- c("node_i", "node_j", "pearson")
+
+sim_tbl <- sim_tbl %>%
+  filter(node_i < node_j) %>%      # evita duplicati e diagonale
+  arrange(desc(pearson))
+
+# -----------------------------
+# 3) Top 15 coppie più simili SENZA riutilizzare lo stesso nodo
+# -----------------------------
+pick_top_unique_pairs <- function(df, n = 15) {
+  df <- df %>% arrange(desc(pearson))
+  used <- character(0)
+  out  <- list()
+
+  for (r in seq_len(nrow(df))) {
+    a <- df$node_i[r]
+    b <- df$node_j[r]
+    if (!(a %in% used) && !(b %in% used)) {
+      out[[length(out) + 1]] <- df[r, , drop = FALSE]
+      used <- c(used, a, b)
+      if (length(out) >= n) break
+    }
+  }
+  bind_rows(out)
+}
+
+top15_pearson_unique <- pick_top_unique_pairs(sim_tbl, n = 30)
+top15_pearson_unique
+
+
+
+```
+
+Notiamo diverse **coppie di nodi** che condividono praticamente **lo stesso vicinato**:\
+in generale, **più il vicinato è piccolo**, più è facile che due personaggi risultino “identici” dal punto di vista delle connessioni.
+
+In alcuni casi, però, questa somiglianza non è solo un artefatto della misura:\
+coppie come **Detective Kalanchoe – Detective Moon** oppure **Spooge – la moglie** sono personaggi che, **nella serie, compaiono quasi sempre insieme**.\
+Di conseguenza è naturale che **interagiscano con le stesse persone** e che risultino estremamente simili.
+
+## Componenti connesse
+
+L’obiettivo di questa analisi è individuare il **nucleo centrale del grafo**,\
+eliminando quei personaggi **marginali alla storia** (comparse o ruoli secondari)\
+la cui presenza non è fondamentale per la comprensione della trama complessiva.
+
+In genere, questi nodi hanno **pochi collegamenti** con il resto della rete\
+e, di conseguenza, **pochi cammini (path / geodesiche)** per raggiungere gli altri personaggi.
+
+Un modo efficace per isolarli è concentrarsi sulle **K-componenti connesse** della rete,\
+in particolare sulla **k-componente connessa più grande**, che rappresenta il cuore narrativo della serie.
+
+Come primo passo, analizzeremo le **bicomponenti** (componenti 2-connesse),\
+ovvero sottografi in cui esistono **almeno due cammini indipendenti** tra ogni coppia di nodi:\
+queste strutture sono più robuste e meno sensibili alla rimozione di singoli personaggi.
+
+### **Bicomponente**
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+
+# TODO: DA RIVEDERE
+
+
+# GENERARE LA VISUALIZZAZIONE DELLA BICOMPONENTE PIU' GRANDE 
+
+
+
+
+
+  library(tidyverse)
+  library(tidygraph)
+  library(ggraph)
+  library(igraph)
+
+
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+# 1) Parto dal grafo Totale: tengo solo archi con peso > 0 e tolgo isolati
+g_main <- graph_bb %>%
+  activate(edges) %>%
+  filter(!is.na(Totale) & Totale > 0) %>%
+  activate(nodes) %>%
+  mutate(deg = centrality_degree()) %>%
+  filter(!is.na(deg) & deg > 0)
+
+g_igr <- as.igraph(g_main)
+
+# 2) Calcolo tutte le bicomponenti (2-componenti connesse)
+bc  <- biconnected_components(g_igr)
+bcn <- bc$components          # lista dei membri per bicomponente
+bsz <- lengths(bcn)           # dimensione di ciascuna bicomponente
+
+# 3) Prendo la bicomponente più grande
+giant_id      <- which.max(bsz)
+giant_members <- bcn[[giant_id]]   # indici dei nodi (in igraph) nella bicomponente maggiore
+
+# 4) Etichetto nodi: dentro / fuori
+group <- rep("Fuori bicomponente", vcount(g_igr))
+group[giant_members] <- "Bicomponente maggiore"
+
+g_bc <- g_main %>%
+  activate(nodes) %>%
+  mutate(
+    bicomp = factor(group, levels = c("Fuori bicomponente", "Bicomponente maggiore"))
+  )
+
+# 5) Visualizzazione
+g_bc %>%
+  ggraph(layout = "kk") +
+  geom_edge_link(
+    colour = "grey60",
+    alpha  = 0.18,
+    width  = 0.9,
+    show.legend = FALSE
+  ) +
+  geom_node_point(aes(color = bicomp), size = 3.2) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.2) +
+  scale_color_manual(
+    values = c("Fuori bicomponente"    = "grey60",
+               "Bicomponente maggiore" = "dodgerblue3"),
+    name   = "Bicomponente"
+  ) +
+  theme_graph() +
+  ggtitle("Breaking Bad — 2-componente (bicomponente) più grande")
+
+
+
+```
+
+Abbiamo così escluso diverse **comparse secondarie**, come interi blocchi legati al **cartello**:\
+anche in assenza di questi personaggi, infatti, la loro **esistenza narrativa è comunque chiara** e non è essenziale per comprendere la struttura principale della storia.
+
+Sono stati esclusi anche alcuni **amici o collaboratori** dei personaggi principali,\
+in particolare quando questi risultano collegati **a un solo nodo centrale che li collega al resto della rete**.\
+In questi casi si crea la tipica **struttura a triangolo”**, con un unico punto di ingresso.
+
+Questa configurazione implica che tali nodi **non dispongano di una seconda via indipendente**\
+per collegarsi al resto del grafo; di conseguenza, **non appartengono a una bicomponente**\
+e vengono naturalmente esclusi dall’analisi del nucleo centrale.
+
+### **Tricomponente**
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.align='center'}
+
+# TODO : DA RIVEDERE
+
+
+# Visualizzare 3-COMPONENTE  PIU' GRANDE
+
+
+  library(tidyverse)
+  library(tidygraph)
+  library(ggraph)
+  library(igraph)
+
+
+set.seed(123)
+options(repr.plot.width = 14, repr.plot.height = 10)
+
+# 1) Tieni solo nodi con grado > 0
+g_main <- graph_bb %>%
+  activate(nodes) %>%
+  mutate(deg = centrality_degree()) %>%
+  filter(!is.na(deg) & deg > 0)
+
+g_igr <- as.igraph(g_main)
+
+# 2) Calcolo k-componenti (blocchi coesivi)
+cb  <- cohesive_blocks(g_igr)
+bn  <- blocks(cb)      # lista dei nodi per blocco
+ck  <- cohesion(cb)    # k di ciascun blocco
+
+# 3) Seleziono i blocchi con k >= 3 e prendo il più grande
+idx3 <- which(ck >= 3)
+
+if (length(idx3) > 0) {
+  sizes3   <- lengths(bn[idx3])
+  best3_id <- idx3[ which.max(sizes3) ]
+  nodes3   <- bn[[best3_id]]   # indici dei nodi nella 3-componente maggiore
+} else {
+  nodes3 <- integer(0)
+}
+
+# 4) Etichetto nodi: dentro / fuori 3-componente
+group3 <- rep("Fuori 3-componente", vcount(g_igr))
+if (length(nodes3) > 0) group3[nodes3] <- "3-componente maggiore"
+
+g_k3 <- g_main %>%
+  activate(nodes) %>%
+  mutate(
+    tricomp = factor(group3,
+                     levels = c("Fuori 3-componente", "3-componente maggiore"))
+  )
+
+# 5) Visualizzazione
+g_k3 %>%
+  ggraph(layout = "kk") +
+  geom_edge_link(
+    colour = "grey60",
+    alpha  = 0.18,
+    width  = 0.9,
+    show.legend = FALSE
+  ) +
+  geom_node_point(aes(color = tricomp), size = 3.2) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.2) +
+  scale_color_manual(
+    values = c("Fuori 3-componente" = "grey60",
+               "3-componente maggiore" = "dodgerblue3"),
+    name = "3-componente"
+  ) +
+  theme_graph() +
+  ggtitle("Breaking Bad — 3-componente (tricomponente) più grande")
+
+
+
+```
+
+A questo punto iniziamo a osservare la **vera esclusione degli elementi più marginali** della rete.\
+Procedendo con le componenti connesse di ordine crescente, il grafo si riduce progressivamente\
+fino a mettere in evidenza il **nucleo dei personaggi principali**,
+
+ovvero coloro che risultano **strutturalmente indispensabili alla trama** e alle dinamiche narrative.
+
+### **Percolation**
+
+Vogliamo capire **quanto il grafo sia robusto** alla rimozione dei nodi\
+e, in particolare, **in quale momento inizia a frammentarsi la componente gigante** in più componenti piccole,\
+fino a perdere coerenza narrativa.
+
+In altre parole, ci chiediamo:\
+**quanti personaggi dobbiamo eliminare per “sfaldare” il grafo nel modo più rapido possibile?**
+
+Per rispondere a questa domanda analizziamo l’andamento della **dimensione della componente gigante**\
+man mano che rimuoviamo i nodi uno alla volta.
+
+Confronteremo tre strategie di rimozione, per capire quale sia la più efficace:
+
+-   **Rimozione casuale dei nodi**\
+    (misura la robustezza generale della rete)
+
+-   **Rimozione casuale dei nodi appartenenti alla 3-componente**\
+    (che abbiamo identificato come il **nucleo reale** del grafo, contenente i nodi principali)
+
+-   **Rimozione dei nodi in ordine di *betweenness centrality***\
+    poiché questi nodi concentrano il maggior numero di percorsi: eliminarli dovrebbe isolare rapidamente\
+    ampie porzioni della rete
+
+```{r echo=FALSE}
+
+# TODO : DA RIVEDERE
+
+# VISUALIZZO I GRAFICI SULLA PERCOLAZIONE
+
+
+
+  library(tidygraph)
+  library(igraph)
+  library(tidyverse)
+
+
+set.seed(123)
+
+# ----------------------------
+# 0) Grafo base (niente isolati)
+# ----------------------------
+g_main <- graph_bb %>%
+  activate(nodes) %>%
+  mutate(deg = centrality_degree()) %>%
+  filter(deg > 0)
+
+ig <- as.igraph(g_main)
+n  <- vcount(ig)
+
+# ------------------------------------------------------------
+# Helper: normalizza QUALUNQUE vettore -> ID interi validi 1..n
+# ------------------------------------------------------------
+to_vertex_ids <- function(g, x) {
+  n <- vcount(g)
+  if (is.null(x)) return(integer(0))
+
+  # appiattisco se arriva lista
+  if (is.list(x)) x <- unlist(x, use.names = FALSE)
+
+  # se è vertex sequence igraph
+  if (inherits(x, "igraph.vs")) x <- as.integer(x)
+
+  # se è character (nomi), matcho su V(g)$name
+  if (is.character(x)) {
+    x <- match(x, V(g)$name)
+  }
+
+  # se è factor
+  if (is.factor(x)) x <- as.character(x)
+
+  # a questo punto provo a fare numerico -> intero
+  x <- suppressWarnings(as.integer(x))
+
+  # pulizia: tolgo NA, <1, >n, duplicati
+  x <- x[!is.na(x)]
+  x <- x[x >= 1 & x <= n]
+  unique(x)
+}
+
+# ----------------------------
+# 1) Funzione percolation (USA SOLO ID VALIDATI)
+# ----------------------------
+percolate <- function(g, order_vec) {
+  order_vec <- to_vertex_ids(g, order_vec)
+
+  giant <- numeric(length(order_vec) + 1)
+  giant[1] <- max(components(g)$csize)
+
+  for (i in seq_along(order_vec)) {
+    g2 <- delete_vertices(g, order_vec[1:i])
+    giant[i + 1] <- if (vcount(g2) == 0) 0 else max(components(g2)$csize)
+  }
+  giant
+}
+
+# ==================================================
+# STRATEGIA 1 — RANDOM (tutti i nodi)
+# ==================================================
+ord_random <- sample(seq_len(n))
+ord_random <- to_vertex_ids(ig, ord_random)
+giant_random <- percolate(ig, ord_random)
+
+# ==================================================
+# STRATEGIA 2 — BETWEENNESS (targeted)
+# ==================================================
+bet <- betweenness(ig, directed = FALSE)
+ord_bet <- order(bet, decreasing = TRUE)
+ord_bet <- to_vertex_ids(ig, ord_bet)
+giant_bet <- percolate(ig, ord_bet)
+
+# ==================================================
+# STRATEGIA 3 — RANDOM sulla 3-COMPONENTE (cohesive blocks)
+# ==================================================
+cb <- cohesive_blocks(ig)
+bn <- blocks(cb)
+ck <- cohesion(cb)
+
+idx3 <- which(ck >= 3)
+
+if (length(idx3) > 0) {
+  sizes <- lengths(bn[idx3])
+  best  <- idx3[which.max(sizes)]
+  nodes3_raw <- bn[[best]]
+} else {
+  nodes3_raw <- integer(0)
+}
+
+nodes3 <- to_vertex_ids(ig, nodes3_raw)
+
+if (length(nodes3) > 0) {
+  ord_core <- sample(nodes3)
+  ord_rest <- sample(setdiff(seq_len(n), nodes3))
+  ord_k3   <- c(ord_core, ord_rest)
+} else {
+  ord_k3 <- sample(seq_len(n))
+}
+ord_k3 <- to_vertex_ids(ig, ord_k3)
+
+giant_k3 <- percolate(ig, ord_k3)
+
+# ----------------------------
+# 4) PLOT COMPARATIVO
+# ----------------------------
+x <- 0:length(ord_random)
+
+plot(
+  x, giant_random,
+  type = "l", lwd = 2, col = "steelblue",
+  xlab = "Numero di nodi rimossi",
+  ylab = "Dimensione componente gigante",
+  main = "Percolation – confronto strategie di rimozione"
+)
+
+lines(x, giant_bet, lwd = 2, col = "firebrick")
+lines(x, giant_k3,  lwd = 2, col = "darkgreen")
+
+legend(
+  "topright",
+  legend = c("Random (tutti i nodi)", "Targeted (Betweenness)", "Random (3-componente)"),
+  col = c("steelblue", "firebrick", "darkgreen"),
+  lwd = 2,
+  bty = "n"
+)
+
+
+```
+
+Come previsto, la rimozione **random** produce un andamento quasi **lineare**:\
+scegliendo i nodi a caso è molto probabile colpire la k-componente più grande (perché contiene più nodi, **è più probabile**),\
+ma l’eliminazione di un singolo nodo **incide poco** sulla connettività globale, dato che nella componente gigante esistono\
+**molti percorsi alternativi** tra i personaggi.
+
+La rimozione **random limitata alla 3-componente** risulta più efficace:\
+in questo caso stiamo selezionando nodi che appartengono al **cuore strutturale** del grafo (il nucleo narrativo),\
+quindi anche una rimozione casuale diventa **più “mirata"** e porta la componente gigante a **frammentarsi più rapidamente**.
+
+Tuttavia, la strategia più veloce rimane l’eliminazione in ordine di **betweenness centrality**.\
+I nodi con betweenness elevata funzionano spesso da **snodi** e **ponti** tra sottogruppi:\
+rimuoverli significa eliminare le “colonne portanti” della rete, facendo collassare in poco tempo intere porzioni di grafo\
+che diventano isolate o si separano in componenti più piccole.
+
+In sintesi, i risultati confermano che lo smantellamento della rete è molto più rapido\
+quando si colpiscono **nodi ponte strutturalmente sensibili**, invece di rimuovere personaggi a caso.
+
+
+## Pesi degli archi
+
+Fino a questo punto non abbiamo considerato esplicitamente l’attributo **peso totale** degli archi,\
+ovvero il **numero di scene condivise** da due personaggi.
+
+Il peso di un arco misura quindi **quanto è forte il legame** tra due nodi:\
+in generale, **più alto è il peso**, più i due personaggi risultano vicini dal punto di vista narrativo\
+e più il loro legame può essere considerato solido.
+
+È importante sottolineare che **non tutti i legami sono uguali**.\
+Alcune relazioni sono centrali e ricorrenti, mentre altre sono episodiche o marginali.\
+Per questo motivo, da qui in avanti analizzeremo alcune **caratteristiche della rete che tengono conto dei pesi**.
+
+### **Triangle intensity**
+
+La *triangle intensity* è un indice semplice (non visto a lezione) che misura la **forza complessiva dei triangoli** nella rete.
+
+L’idea è la seguente:\
+- si considerano **tutti i triangoli chiusi** del grafo;\
+- per ciascun triangolo si calcola una **somma pesata dei suoi archi**;\
+- questo valore rappresenta il **peso (o intensità) del triangolo**.
+
+Analizzando i triangoli con intensità maggiore possiamo individuare **sottostrutture molto robuste**,\
+ovvero gruppi di tre personaggi legati da relazioni difficili da spezzare.
+
+Va notato che questa misura **non** indica il numero di scene in cui tutti e tre i personaggi compaiono insieme,\
+ma fornisce un’indicazione sulla **forza complessiva del legame** tra di essi.
+
+Esistono anche varianti di questo indice, ad esempio:\
+- la **media** dei pesi degli archi del triangolo;\
+- oppure il **peso minimo** (l’arco “collo di bottiglia”),\
+che identifica il legame più debole la cui rottura porterebbe allo scioglimento del triangolo.
+
+```{r echo=FALSE}
+
+# TODO : DA RIVEDERE
+
+#  TRIANGOLE INTENSITY
+
+
+
+  library(igraph)
+  library(dplyr)
+  library(tibble)
+
+
+# 0) igraph dal tuo tbl_graph
+ig <- as.igraph(graph_bb)
+
+# 1) nomi nodi sicuri
+if (is.null(V(ig)$name)) V(ig)$name <- as.character(seq_len(vcount(ig)))
+
+# 2) scelgo colonna peso: Totale > weight
+edge_attrs <- edge_attr_names(ig)
+wcol <- if ("Totale" %in% edge_attrs) "Totale" else if ("weight" %in% edge_attrs) "weight" else NULL
+if (is.null(wcol)) stop("Serve un attributo peso sugli archi: 'Totale' oppure 'weight'.")
+
+# copio in un nome standard
+E(ig)$w <- as.numeric(edge_attr(ig, wcol))
+E(ig)$w[is.na(E(ig)$w)] <- 0
+
+# 3) funzione peso arco (a,b) ROBUSTA (fix del tuo errore)
+get_w <- function(g, a, b) {
+  eid <- get.edge.ids(g, vp = matrix(c(a, b), ncol = 2, byrow = TRUE), directed = FALSE)
+  if (eid == 0) return(0)
+  E(g)$w[eid]
+}
+
+# 4) triangoli UNICI (3-cliques)
+tri_list <- cliques(ig, min = 3, max = 3)
+
+# 5) tabella triangoli + pesi
+triangles_df <- lapply(tri_list, function(v) {
+  v <- as.integer(v)
+  i <- v[1]; j <- v[2]; k <- v[3]
+
+  w12 <- get_w(ig, i, j)
+  w13 <- get_w(ig, i, k)
+  w23 <- get_w(ig, j, k)
+
+  tibble(
+    n1 = V(ig)$name[i],
+    n2 = V(ig)$name[j],
+    n3 = V(ig)$name[k],
+    w12 = w12,
+    w13 = w13,
+    w23 = w23,
+    tri_weight = w12 + w13 + w23
+  )
+}) %>% bind_rows()
+
+# 6) Top 10 triangoli più pesanti
+top10_triangles <- triangles_df %>%
+  arrange(desc(tri_weight)) %>%
+  slice_head(n = 10)
+
+top10_triangles
+
+
+```
+
+Un **triangolo pesante** identifica un gruppo di tre personaggi in cui **ogni coppia interagisce frequentemente**,\
+anche se non necessariamente nello stesso contesto narrativo o nella stessa scena.
+
+### **Coesione relazionale indiretta**
+
+Un triangolo con peso elevato indica che:
+
+-   i tre personaggi **gravitano attorno allo stesso nucleo narrativo**;\
+-   condividono **ambienti, storyline e reti di relazioni simili**;\
+-   sono **fortemente integrati nello stesso sottosistema sociale**,\
+    anche senza interagire tutti insieme.
+
+Qui emerge una chiara analogia con quanto visto in precedenza con la \*\*similarità coseno\* \*:\
+la vicinanza tra i nodi **non è spaziale né temporale**,\
+ma **strutturale e relazionale**.
+
+Un esempio emblematico è la triade:
+
+**Walter White – Jesse Pinkman – Skyler White**
+
+-   Skyler e Jesse condividono raramente scene dirette;\
+-   entrambi, però, hanno legami **molto forti con Walter**;\
+-   appartengono allo **stesso nucleo narrativo centrale**.
+
+Il triangolo risulta quindi pesante perché:\
+- **Walter – Jesse**: legame fortissimo\
+- **Walter – Skyler**: legame fortissimo\
+- **Jesse – Skyler**: presente ma meno intenso
+
+La triade è quindi **coesa anche senza interazione simultanea**.
